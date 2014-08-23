@@ -1,0 +1,51 @@
+{
+   "abstract" : "use Matrix with L<IO::Async>",
+   "author" : [
+      "Paul Evans <leonerd@leonerd.org.uk>"
+   ],
+   "dynamic_config" : 1,
+   "generated_by" : "Module::Build version 0.4206",
+   "license" : [
+      "perl_5"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "Net-Async-Matrix",
+   "prereqs" : {
+      "build" : {
+         "requires" : {
+            "Test::More" : "0.88"
+         }
+      },
+      "runtime" : {
+         "requires" : {
+            "Data::Dump" : "0",
+            "Future::Utils" : "0",
+            "IO::Async::Notifier" : "0",
+            "JSON" : "0",
+            "Net::Async::HTTP" : "0",
+            "POSIX" : "0",
+            "Struct::Dumb" : "0"
+         }
+      }
+   },
+   "provides" : {
+      "Net::Async::Matrix" : {
+         "file" : "lib/Net/Async/Matrix.pm",
+         "version" : "0.01"
+      },
+      "Net::Async::Matrix::Room" : {
+         "file" : "lib/Net/Async/Matrix/Room.pm",
+         "version" : "0.01"
+      }
+   },
+   "release_status" : "stable",
+   "resources" : {
+      "license" : [
+         "http://dev.perl.org/licenses/"
+      ]
+   },
+   "version" : "0.01"
+}

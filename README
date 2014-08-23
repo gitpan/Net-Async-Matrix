@@ -1,0 +1,104 @@
+NAME
+    `Net::Async::Matrix' - use Matrix with IO::Async
+
+SYNOPSIS
+     TODO
+
+DESCRIPTION
+    This module allows an program to interact with a Matrix homeserver as a
+    connected user client.
+
+EVENTS
+    The following events are invoked, either using subclass methods or
+    `CODE' references in parameters:
+
+  on_log $message
+    A request to write a debugging log message. This is provided temporarily
+    for development and debugging purposes, but will at some point be
+    removed when the code has reached a certain level of stability.
+
+  on_presence $user, %changes
+    Invoked on receipt of a user presence change event from the homeserver.
+    `%changes' will map user state field names to 2-element ARRAY
+    references, each containing the old and new values of that field.
+
+  on_room_add $room
+  on_room_del $room
+    Invoked when a new room becomes known about (because of the initial
+    IMSync or on receipt of a room invite), or when the user has now left a
+    room. Each is passed an instance of `Net::Async::Matrix::Room'.
+
+PARAMETERS
+    The following named parameters may be passed to `new' or `configure'. In
+    addition, `CODE' references for event handlers using the event names
+    listed above can also be given.
+
+  user_id => STRING
+  access_token => STRING
+    Optional login details to use for logging in as an existing user if an
+    access token is already known. For registering a new user, see instead
+    the `register' method.
+
+  server => STRING
+    Hostname and port number to contact the homeserver at. Given in the form
+
+     $hostname:$port
+
+    This string will be interpolated directly into HTTP request URLs.
+
+METHODS
+    The following methods documented with a trailing call to `->get' return
+    Future instances.
+
+  $f = $matrix->start
+    Performs the initial IMSync on the server, and starts the event stream
+    to begin receiving events.
+
+    While this method does return a `Future' it is not required that the
+    caller keep track of this; the object itself will store it. It will
+    complete when the initial IMSync has fininshed, and the event stream has
+    started.
+
+  $matrix->stop
+    Stops the event stream. After calling this you will need to use `start'
+    again to continue receiving events.
+
+  $user = $matrix->myself
+    Returns the user object representing the connected user.
+
+  ( $user_id, $access_token ) = $matrix->register( $localpart )->get
+    Sends a user account registration request to the Matrix homeserver to
+    create a new account. On successful completion, the returned user ID and
+    token are stored by the object itself and the event stream is started.
+
+  $name = $matrix->get_displayname->get
+  $matrix->set_displayname( $name )->get
+    Accessor and mutator for the user account's "display name" profile
+    field.
+
+  ( $state, $msg ) = $matrix->get_presence->get
+  $matrix->set_presence( $state, $msg )->get
+    Accessor and mutator for the user's current presence state and optional
+    status message string.
+
+  $matrix->create_room( $room_alias )->get
+    Requests the creation of a new room with the given alias name.
+
+  $matrix->join_room( $room_alias )->get
+    Requests to join an existing room with the given alias name.
+
+  $syncdata = $matrix->im_sync->get( %args )
+    Performs an IMSync operation, fetching the set of rooms the user is a
+    member of, their current state, and an optional snapshot of the latest
+    messages there.
+
+    Takes the following named arguments:
+
+    limit => INT
+        Optional number of messages per room to return. Defaults to zero;
+        fetching only the list of rooms and their state, without any message
+        snapshots.
+
+AUTHOR
+    Paul Evans <leonerd@leonerd.org.uk>
+
