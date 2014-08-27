@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use Carp;
 
@@ -65,11 +65,16 @@ each containing the old and new values of that field.
 
 =head2 on_room_add $room
 
+Invoked when a new room has completed its initial sync, either because of the
+client's initial sync, or because it was just created or joined. Note that if
+default C<on_room_*> event handlers are defined, these may have already been
+invoked before C<on_room_add>.
+
+Passed an instance of L<Net::Async::Matrix::Room>.
+
 =head2 on_room_del $room
 
-Invoked when a new room becomes known about (because of the initial IMSync or
-on receipt of a room invite), or when the user has now left a room. Each is
-passed an instance of C<Net::Async::Matrix::Room>.
+Invoked when the user has now left a room.
 
 =cut
 
@@ -94,6 +99,10 @@ Hostname and port number to contact the homeserver at. Given in the form
  $hostname:$port
 
 This string will be interpolated directly into HTTP request URLs.
+
+=head2 on_room_member, on_room_message => CODE
+
+Optional. Sets default event handlers on new room objects.
 
 =cut
 
@@ -135,7 +144,8 @@ sub configure
    my %params = @_;
 
    foreach (qw( user_id access_token server ua
-                on_log on_presence on_room_add on_room_del )) {
+                on_log on_presence on_room_add on_room_del
+                on_room_member on_room_message )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
 
@@ -247,49 +257,55 @@ While this method does return a C<Future> it is not required that the caller
 keep track of this; the object itself will store it. It will complete when the
 initial IMSync has fininshed, and the event stream has started.
 
+If the initial sync has already been requested, this method simply returns the
+future it returned the last time, ensuring that you can await the client
+starting up simply by calling it; it will not start a second time.
+
 =cut
 
 sub start
 {
    my $self = shift;
 
-   my $event_token;
+   return $self->{start_f} ||= do {
+      my $event_token;
 
-   my $f = $self->get_current_event_token->then( sub {
-      ( $event_token ) = @_;
+      my $f = $self->get_current_event_token->then( sub {
+         ( $event_token ) = @_;
 
-      $self->im_sync
-   })->then( sub {
-      my ( $sync ) = @_;
+         $self->initial_sync
+      })->then( sub {
+         my ( $sync ) = @_;
 
-      my @roomsync_f;
+         my @roomsync_f;
 
-      foreach ( @{ $sync->{rooms} } ) {
-         my $room_id = $_->{room_id};
-         my $membership = $_->{membership};
+         foreach ( @{ $sync->{rooms} } ) {
+            my $room_id = $_->{room_id};
+            my $membership = $_->{membership};
 
-         if( $membership eq "join" ) {
-            my $state = $_->{state};
+            if( $membership eq "join" ) {
+               my $state = $_->{state};
 
-            my $room = $self->_make_room( $room_id );
-            $self->_incoming_event( $_ ) for @$state;
+               my $room = $self->_make_room( $room_id );
+               $self->_incoming_event( $_ ) for @$state;
 
-            $self->maybe_invoke_event( on_room_add => $room );
+               $self->maybe_invoke_event( on_room_add => $room );
 
-            push @roomsync_f, $room->sync( limit => 50 );
+               push @roomsync_f, $room->sync_messages( limit => 50 );
+            }
+            elsif( $membership eq "invite" ) {
+               $self->log( "TODO: imsync returned a room invite" );
+            }
+            # Else: TODO something else?
          }
-         elsif( $membership eq "invite" ) {
-            $self->log( "TODO: imsync returned a room invite" );
-         }
-         # Else: TODO something else?
-      }
 
-      Future->needs_all( @roomsync_f );
-   })->then( sub {
-      $self->start_longpoll( start => $event_token );
-      Future->done;
-   });
-   $self->adopt_future( $f );
+         Future->needs_all( @roomsync_f );
+      })->then( sub {
+         $self->start_longpoll( start => $event_token );
+         Future->done;
+      });
+      $self->adopt_future( $f );
+   };
 }
 
 =head2 $matrix->stop
@@ -303,6 +319,7 @@ sub stop
 {
    my $self = shift;
 
+   ( delete $self->{start_f} )->cancel;
    $self->stop_longpoll;
 }
 
@@ -342,6 +359,8 @@ sub start_longpoll
             return sub {
                my ( $data ) = @_ or return $header;
 
+               $header->add_content( $data );
+
                foreach my $chunk ( $json->incr_parse( $data ) ) {
                   $self->_incoming_event( $_ ) foreach @{ $chunk->{chunk} };
 
@@ -376,28 +395,32 @@ sub _get_or_make_user
 sub _make_room
 {
    my $self = shift;
-   my ( $room_id ) = @_;
+   my ( $room_id, @args ) = @_;
 
    $self->{rooms_by_id}{$room_id} and
       croak "Already have a room with ID '$room_id'";
 
+   foreach (qw( message member )) {
+      push @args, "on_$_" => $self->{"on_room_$_"} if $self->{"on_room_$_"};
+   }
+
    my $room = $self->{rooms_by_id}{$room_id} = Net::Async::Matrix::Room->new(
       matrix  => $self,
       room_id => $room_id,
+      @args,
    );
+   $self->add_child( $room );
+
    return $room;
 }
 
 sub _get_or_make_room
 {
    my $self = shift;
-   my ( $room_id ) = @_;
+   my ( $room_id, @args ) = @_;
 
-   return $self->{rooms_by_id}{$room_id} // do {
-      my $room = $self->_make_room( $room_id );
-      $self->maybe_invoke_event( on_room_add => $room );
-      $room;
-   };
+   return $self->{rooms_by_id}{$room_id} //
+      $self->_make_room( $room_id, @args );
 }
 
 =head2 $user = $matrix->myself
@@ -574,9 +597,12 @@ sub drop_presence
    );
 }
 
-=head2 $matrix->create_room( $room_alias )->get
+=head2 ( $room, $room_alias ) = $matrix->create_room( $alias_localpart )->get
 
-Requests the creation of a new room with the given alias name.
+Requests the creation of a new room and associates a new alias with the given
+localpart on the server. The returned C<Future> will return an instance of
+L<Net::Async::Matrix::Room> and a string containing the full alias that was
+created.
 
 =cut
 
@@ -589,15 +615,18 @@ sub create_room
    $body->{room_alias_name} = $room_alias if defined $room_alias;
    # TODO: visibility?
 
-   $self->_do_POST_json( "/rooms", $body );
+   $self->_do_POST_json( "/createRoom", $body )->then( sub {
+      my ( $content ) = @_;
 
-   # TODO: wait on an incoming room membership event and return the new room
-   # object from that
+      my $room = $self->_get_or_make_room( $content->{room_id} );
+      $self->maybe_invoke_event( on_room_add => $room );
+      Future->done( $room, $content->{room_alias} );
+   });
 }
 
-=head2 $matrix->join_room( $room_alias )->get
+=head2 $matrix->join_room( $room_alias_or_id )->get
 
-Requests to join an existing room with the given alias name.
+Requests to join an existing room with the given alias name or plain room ID.
 
 =cut
 
@@ -606,18 +635,25 @@ sub join_room
    my $self = shift;
    my ( $room_alias ) = @_;
 
+   my $f;
    if( $room_alias =~ m/^#/ ) {
-      $self->_do_PUT_json( "/join/$room_alias", {} );
+      $f = $self->_do_POST_json( "/join/$room_alias", {} )->then( sub {
+         my ( $content ) = @_;
+         Future->done( $content->{room_id} );
+      });
    }
    elsif( $room_alias =~ m/^!/ ) {
       # Internal room ID directly
-      $self->_do_PUT_json( "/rooms/$room_alias/members/$self->{user_id}/state", {
+      $f = $self->_do_PUT_json( "/rooms/$room_alias/state/m.room.member/$self->{user_id}", {
          membership => "join",
-      } );
+      } )->then_done( $room_alias );
    }
 
-   # TODO: wait on an incoming room membership event and return the new room
-   # object from that
+   $f->then( sub {
+      my ( $room_id ) = @_;
+      my $room = $self->_get_or_make_room( $room_id );
+      $room->initial_sync
+   });
 }
 
 sub leave_room
@@ -625,7 +661,7 @@ sub leave_room
    my $self = shift;
    my ( $roomid ) = @_;
 
-   $self->_do_DELETE( "/rooms/$roomid/members/$self->{user_id}/state" );
+   $self->_do_DELETE( "/rooms/$roomid/state/m.room.member/$self->{user_id}" );
 }
 
 sub room_list
@@ -650,7 +686,7 @@ sub send_room_message
    $self->_do_PUT_json( "/rooms/$roomid/messages/$self->{user_id}/$msgid", $content );
 }
 
-=head2 $syncdata = $matrix->im_sync->get( %args )
+=head2 $syncdata = $matrix->initial_sync->get( %args )
 
 Performs an IMSync operation, fetching the set of rooms the user is a member
 of, their current state, and an optional snapshot of the latest messages
@@ -669,17 +705,15 @@ only the list of rooms and their state, without any message snapshots.
 
 =cut
 
-sub im_sync
+sub initial_sync
 {
    my $self = shift;
    my %args = @_;
 
    $args{limit} //= 0;
 
-   $self->_do_GET_json( "/im/sync",
+   $self->_do_GET_json( "/initialSync",
       limit => $args{limit},
-      from  => "END",
-      to    => "START"
    );
 }
 
@@ -722,12 +756,24 @@ sub _handle_event_m_room
    my $event = pop;
    my @type_parts = @_;
 
-   my $room = $self->_get_or_make_room( $event->{room_id} );
+   # Room messages for existing rooms
+   my $handler;
+   if( $handler = $self->{rooms_by_id}{$event->{room_id}} ) {
+      # OK
+   }
+   elsif( $event->{state_key} eq $self->{user_id} ) {
+      $handler = $self;
+   }
+   else {
+      $self->log( "TODO: Room event on unknown room ID $event->{room_id} not about myself" );
+      # Ignore it for now
+      return;
+   }
 
    my @subtype_parts;
    while( @type_parts ) {
-      if( my $handler = $room->can( "_handle_roomevent_" . join "_", @type_parts ) ) {
-         $handler->( $room, @subtype_parts, $event );
+      if( my $code = $handler->can( "_handle_roomevent_" . join "_", @type_parts ) ) {
+         $code->( $handler, @subtype_parts, $event );
          return;
       }
 
@@ -736,6 +782,52 @@ sub _handle_event_m_room
 
    $self->log( "Unhandled room event " . join "_", @subtype_parts );
 }
+
+sub _handle_roomevent_member
+{
+   my $self = shift;
+   my $event = pop;
+
+   my $content = $event->{content};
+   my $membership = $content->{membership};
+
+   if( $membership eq "join" ) {
+      my $room = $self->_get_or_make_room( $event->{room_id} );
+      $self->adopt_future(
+         # TODO: "members" isn't enough. We want other config too...
+         $room->initial_sync
+            ->on_done( sub {
+               $self->maybe_invoke_event( on_room_add => $room )
+            })
+      );
+   }
+   else {
+      $self->log( "Unhandled selfroom event member membership=$membership" );
+   }
+}
+
+=head1 USER STRUCTURES
+
+Parameters documented as C<$user> receive a user struct, which supports the
+following methods:
+
+=head2 $user_id = $user->user_id
+
+User ID of the user.
+
+=head2 $displayname = $user->displayname
+
+Profile displayname of the user.
+
+=head2 $state = $user->state
+
+Presence state. One of C<offline>, C<unavailable> or C<online>.
+
+=head2 $presence_mtime = $user->presence_mtime
+
+Epoch time that the presence state last changed.
+
+=cut
 
 =head1 AUTHOR
 

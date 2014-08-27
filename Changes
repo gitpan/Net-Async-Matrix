@@ -1,5 +1,19 @@
 Revision history for Net-Async-Matrix
 
+0.02    2014/08/27 19:30:34
+        [CHANGES]
+         * Updates for latest Matrix REST API
+         * ->create_room to return a new Room object
+         * Document the user and membership structs
+         * Initial sync of rooms when joining
+         * Don't store room alias names
+         * Added $room->members
+         * Allow setting default on_room_* event handlers
+
+        [BUGFIXES]
+         * Remember to fill in request content body of event stream requests,
+           so wrappers around NaHTTP still see it
+
 0.01    2014/08/23 10:29:11
         First version, released on an unsuspecting world.
 

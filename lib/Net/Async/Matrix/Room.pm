@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use Carp;
 
@@ -93,21 +93,16 @@ sub room_id
    return $self->{room_id};
 }
 
-=head2 $name = $room->room_alias_name
-
-Returns the human-readable room alias name for the room, if one is known,
-otherwise returns the room ID itself. This method should be used to obtain a
-name to display to end-users in UIs or similar.
-
-=cut
-
-sub room_alias_name
+sub initial_sync
 {
    my $self = shift;
-   return $self->{room_alias_name} // $self->room_id;
+
+   $self->{initial_sync} ||= Future->needs_all(
+      $self->sync_members,
+   );
 }
 
-sub sync
+sub sync_messages
 {
    my $self = shift;
    my %args = @_;
@@ -138,6 +133,37 @@ sub sync
 
       Future->done( $self );
    });
+}
+
+sub sync_members
+{
+   my $self = shift;
+
+   my $matrix = $self->{matrix};
+
+   $matrix->_do_GET_json( "/rooms/$self->{room_id}/members" )->then( sub {
+      my ( $response ) = @_;
+
+      foreach my $event ( @{ $response->{chunk} } ) {
+         # These look like normal events
+         $self->_handle_roomevent_member( $event );
+      }
+
+      Future->done( $self );
+   });
+}
+
+=head2 @members = $room->members
+
+Returns a list of member structs containing the currently known members of the
+room, in no particular order.
+
+=cut
+
+sub members
+{
+   my $self = shift;
+   return values %{ $self->{members_by_userid} };
 }
 
 =head2 $room->send_message( %args )->get
@@ -210,10 +236,7 @@ sub _handle_roomevent_config
    my ( $event ) = @_;
    my $content = $event->{content};
 
-   if( defined $content->{room_alias_name} ) {
-      my ( $domain ) = $self->{room_id} =~ m/:([^:]+)$/;
-      $self->{room_alias_name} = sprintf "#%s:%s", $content->{room_alias_name}, $domain;
-   }
+   # TODO: do we even /get/ this any more?
 }
 
 sub _handle_roomevent_message
@@ -237,7 +260,7 @@ sub _handle_roomevent_member
    my $self = shift;
    my ( $event ) = @_;
 
-   my $user_id = $event->{target_user_id}; # target == user the change applies to
+   my $user_id = $event->{state_key}; # == user the change applies to
    my $content = $event->{content};
 
    my $member = $self->_get_or_make_member( $user_id );
@@ -277,6 +300,31 @@ sub _handle_event_m_presence
 
    $self->maybe_invoke_event( on_member => $member, %changes );
 }
+
+=head1 MEMBERSHIP STRUCTURES
+
+Parameters documented as C<$member> receive a membership struct, which
+supports the following methods:
+
+=head2 $user_id = $member->user_id
+
+User ID of the member.
+
+=head2 $displayname = $member->displayname
+
+Profile displayname of the user.
+
+=head2 $membership = $member->membership
+
+Membership state. One of C<invite> or C<join>.
+
+=head2 $state = $member->state
+
+Presence state. One of C<offline>, C<unavailable> or C<online>.
+
+=head2 $mtime = $member->mtime
+
+Epoch time that the presence state last changed.
 
 =head1 AUTHOR
 

@@ -23,10 +23,15 @@ EVENTS
     references, each containing the old and new values of that field.
 
   on_room_add $room
+    Invoked when a new room has completed its initial sync, either because
+    of the client's initial sync, or because it was just created or joined.
+    Note that if default `on_room_*' event handlers are defined, these may
+    have already been invoked before `on_room_add'.
+
+    Passed an instance of Net::Async::Matrix::Room.
+
   on_room_del $room
-    Invoked when a new room becomes known about (because of the initial
-    IMSync or on receipt of a room invite), or when the user has now left a
-    room. Each is passed an instance of `Net::Async::Matrix::Room'.
+    Invoked when the user has now left a room.
 
 PARAMETERS
     The following named parameters may be passed to `new' or `configure'. In
@@ -46,6 +51,9 @@ PARAMETERS
 
     This string will be interpolated directly into HTTP request URLs.
 
+  on_room_member, on_room_message => CODE
+    Optional. Sets default event handlers on new room objects.
+
 METHODS
     The following methods documented with a trailing call to `->get' return
     Future instances.
@@ -58,6 +66,11 @@ METHODS
     caller keep track of this; the object itself will store it. It will
     complete when the initial IMSync has fininshed, and the event stream has
     started.
+
+    If the initial sync has already been requested, this method simply
+    returns the future it returned the last time, ensuring that you can
+    await the client starting up simply by calling it; it will not start a
+    second time.
 
   $matrix->stop
     Stops the event stream. After calling this you will need to use `start'
@@ -81,13 +94,17 @@ METHODS
     Accessor and mutator for the user's current presence state and optional
     status message string.
 
-  $matrix->create_room( $room_alias )->get
-    Requests the creation of a new room with the given alias name.
+  ( $room, $room_alias ) = $matrix->create_room( $alias_localpart )->get
+    Requests the creation of a new room and associates a new alias with the
+    given localpart on the server. The returned `Future' will return an
+    instance of Net::Async::Matrix::Room and a string containing the full
+    alias that was created.
 
-  $matrix->join_room( $room_alias )->get
-    Requests to join an existing room with the given alias name.
+  $matrix->join_room( $room_alias_or_id )->get
+    Requests to join an existing room with the given alias name or plain
+    room ID.
 
-  $syncdata = $matrix->im_sync->get( %args )
+  $syncdata = $matrix->initial_sync->get( %args )
     Performs an IMSync operation, fetching the set of rooms the user is a
     member of, their current state, and an optional snapshot of the latest
     messages there.
@@ -98,6 +115,22 @@ METHODS
         Optional number of messages per room to return. Defaults to zero;
         fetching only the list of rooms and their state, without any message
         snapshots.
+
+USER STRUCTURES
+    Parameters documented as `$user' receive a user struct, which supports
+    the following methods:
+
+  $user_id = $user->user_id
+    User ID of the user.
+
+  $displayname = $user->displayname
+    Profile displayname of the user.
+
+  $state = $user->state
+    Presence state. One of `offline', `unavailable' or `online'.
+
+  $presence_mtime = $user->presence_mtime
+    Epoch time that the presence state last changed.
 
 AUTHOR
     Paul Evans <leonerd@leonerd.org.uk>

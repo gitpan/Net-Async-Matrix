@@ -14,10 +14,10 @@ name: Net-Async-Matrix
 provides:
   Net::Async::Matrix:
     file: lib/Net/Async/Matrix.pm
-    version: '0.01'
+    version: '0.02'
   Net::Async::Matrix::Room:
     file: lib/Net/Async/Matrix/Room.pm
-    version: '0.01'
+    version: '0.02'
 requires:
   Data::Dump: '0'
   Future::Utils: '0'
@@ -28,4 +28,4 @@ requires:
   Struct::Dumb: '0'
 resources:
   license: http://dev.perl.org/licenses/
-version: '0.01'
+version: '0.02'

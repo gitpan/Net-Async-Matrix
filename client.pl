@@ -122,7 +122,7 @@ sub new_room
 
    my $floatbox;
    my $roomtab = $console->add_tab(
-      name => $room->room_alias_name,
+      name => $room->room_id,
       make_widget => sub {
          my ( $scroller ) = @_;
 
