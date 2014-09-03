@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use Carp;
 
@@ -20,7 +20,7 @@ use Future;
 use Struct::Dumb;
 use Time::HiRes qw( time );
 
-struct Member => [qw( user_id displayname membership state mtime )];
+struct Member => [qw( user displayname membership )];
 
 =head1 NAME
 
@@ -111,7 +111,7 @@ sub sync_messages
 
    my $matrix = $self->{matrix};
 
-   $matrix->_do_GET_json( "/rooms/$self->{room_id}/messages/list",
+   $matrix->_do_GET_json( "/rooms/$self->{room_id}/messages",
       from  => "END",
       dir   => "b",
       limit => $limit,
@@ -219,7 +219,8 @@ sub send_message
       $args{$_} or croak "'$type' messages require a '$_' field";
    }
 
-   $self->{matrix}->send_room_message( $self->room_id, \%args );
+   $self->{matrix}->_do_POST_json( "/rooms/$self->{room_id}/send/m.room.message", \%args )
+      ->then_done()
 }
 
 sub _get_or_make_member
@@ -227,7 +228,9 @@ sub _get_or_make_member
    my $self = shift;
    my ( $user_id ) = @_;
 
-   return $self->{members_by_userid}{$user_id} ||= Member( $user_id, undef, undef, undef, undef );
+   my $user = $self->{matrix}->_get_or_make_user( $user_id );
+
+   return $self->{members_by_userid}{$user_id} ||= Member( $user, undef, undef );
 }
 
 sub _handle_roomevent_config
@@ -249,7 +252,7 @@ sub _handle_roomevent_message
 
    # If we don't have a member yet, create a temporary one just to get the
    #   user_id out of
-   $member ||= Member( $user_id, undef, undef, undef, undef );
+   $member ||= Member( $user_id, undef, undef );
 
    $self->maybe_invoke_event( on_message =>
       $member, $event->{content} );
@@ -266,16 +269,13 @@ sub _handle_roomevent_member
    my $member = $self->_get_or_make_member( $user_id );
 
    my %changes;
-   foreach (qw( membership displayname state )) {
+   foreach (qw( membership displayname )) {
       next unless defined $content->{$_};
       next if defined $member->$_ and $content->{$_} eq $member->$_;
 
       $changes{$_} = [ $member->$_, $content->{$_} ];
       $member->$_ = $content->{$_};
    }
-
-   defined $content->{mtime_age} and
-      $member->mtime = time() - ( $content->{mtime_age} / 1000 );
 
    $self->maybe_invoke_event( on_member => $member, %changes );
 
@@ -294,9 +294,7 @@ sub _handle_event_m_presence
    my $member = $self->{members_by_userid}{$user->user_id} or return;
 
    $changes{$_} and $member->$_ = $changes{$_}[1]
-      for qw( displayname state );
-   $changes{mtime_age} and
-      $member->mtime = time() - ( $changes{mtime_age}[1] / 1000 );
+      for qw( displayname );
 
    $self->maybe_invoke_event( on_member => $member, %changes );
 }
@@ -306,9 +304,9 @@ sub _handle_event_m_presence
 Parameters documented as C<$member> receive a membership struct, which
 supports the following methods:
 
-=head2 $user_id = $member->user_id
+=head2 $user = $member->user
 
-User ID of the member.
+User object of the member.
 
 =head2 $displayname = $member->displayname
 
@@ -317,14 +315,6 @@ Profile displayname of the user.
 =head2 $membership = $member->membership
 
 Membership state. One of C<invite> or C<join>.
-
-=head2 $state = $member->state
-
-Presence state. One of C<offline>, C<unavailable> or C<online>.
-
-=head2 $mtime = $member->mtime
-
-Epoch time that the presence state last changed.
 
 =head1 AUTHOR
 

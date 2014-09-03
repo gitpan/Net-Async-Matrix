@@ -22,11 +22,11 @@ use Data::Dump 'pp';
 use POSIX qw( strftime );
 
 my $CONFIG = "client.yaml";
-my $SERVER;
 
 GetOptions(
    "C|config=s" => \$CONFIG,
-   "S|server=s" => \$SERVER,
+   "S|server=s" => \my $SERVER,
+   "ssl+"       => \my $SSL,
 ) or exit 1;
 
 my $loop = IO::Async::Loop->new;
@@ -71,6 +71,7 @@ my $config;
 if( -f $CONFIG ) {
    $config = YAML::LoadFile( $CONFIG );
    $SERVER //= $config->{server};
+   $SSL    //= $config->{ssl};
 }
 
 $SERVER //= "localhost:8080";
@@ -82,18 +83,24 @@ my %tabs_by_roomid;
 
 $loop->add( $matrix = Net::Async::Matrix->new(
    server => $SERVER,
+   ( $SSL ? (
+      SSL             => 1,
+      SSL_verify_mode => 0,
+   ) : () ),
+
    on_log => \&log,
+
    on_presence => sub {
       my ( $self, $user, %changes ) = @_;
 
-      if( exists $changes{state} ) {
-         add_line_colour( yellow => " * ".make_username($user)." now " . $user->state );
+      if( exists $changes{presence} ) {
+         add_line_colour( yellow => " * ".make_username($user)." now " . $user->presence );
       }
       elsif( exists $changes{displayname} ) {
          add_line_colour( yellow => " * $changes{displayname}[0] is now called ".make_username($user) );
       }
    },
-   on_room_add => sub {
+   on_room_new => sub {
       my ( $self, $room ) = @_;
       new_room( $room );
    },
@@ -174,11 +181,23 @@ sub new_room
                : ( $presence_float->show, $visible = 1 );
    });
 
+   my $last_date;
+
    $room->configure(
       on_message => sub {
          my ( $self, $member, $content ) = @_;
+         my $user = $member->user;
 
-         my $tstamp = strftime( "[%H:%M]", localtime $content->{hsob_ts} / 1000 );
+         my @time = localtime $content->{hsob_ts} / 1000;
+         my $date = strftime( "%Y/%m/%d", @time );
+         my $tstamp = strftime( "[%H:%M]", @time );
+
+         if( !defined $last_date or $date ne $last_date ) {
+            my $dateline = String::Tagged->new( "-- day is now $date --" )
+               ->apply_tag( 0, -1, fg => "grey" );
+            $roomtab->add_line( $dateline );
+            $last_date = $date;
+         }
 
          my $s = String::Tagged->new( "" );
          $s->append_tagged( $tstamp );
@@ -187,7 +206,7 @@ sub new_room
             $s->append_tagged( $member->displayname, fg => "cyan" );
          }
          else {
-            $s->append_tagged( $member->user_id, fg => "grey" );
+            $s->append_tagged( $user->user_id, fg => "grey" );
          }
          $s->append_tagged( "> ", fg => "purple" );
          $s->append       ( $content->{body} );
@@ -200,7 +219,9 @@ sub new_room
          # Ignore invited users
          return if $member->membership eq "invite";
 
-         my $user_id = $member->user_id;
+         my $user = $member->user;
+
+         my $user_id = $user->user_id;
 
          # Find an existing row if we can
          my $rowidx;
@@ -222,17 +243,17 @@ sub new_room
                $name = Tickit::Widget::Static->new( text => "" ),
                $since = Tickit::Widget::Static->new( text => "" ),
             ] );
-            push @presence_userids, $member->user_id;
+            push @presence_userids, $user_id;
          }
 
-         $name->set_style( fg => $PRESENCE_STATE_TO_COLOUR{$member->state} )
-            if defined $member->state;
+         $name->set_style( fg => $PRESENCE_STATE_TO_COLOUR{$user->presence} )
+            if defined $user->presence;
          $name->set_text(
-            defined $member->displayname ? $member->displayname : "[".$member->user_id."]"
+            defined $member->displayname ? $member->displayname : "[".$user->user_id."]"
          );
 
-         if( defined $member->mtime ) {
-            $since->set_text( strftime "%Y/%m/%d %H:%M", localtime $member->mtime );
+         if( defined $user->last_active ) {
+            $since->set_text( strftime "%Y/%m/%d %H:%M", localtime $user->last_active );
          }
          else {
             $since->set_text( "    --    " );
@@ -356,7 +377,7 @@ sub cmd_plist
       my @users = @_;
 
       Future->done(
-         +( map { make_username($_) . " - " . $_->state } @users ),
+         +( map { make_username($_) . " - " . $_->presence } @users ),
          scalar(@users) . " users total"
       );
    });
@@ -369,7 +390,7 @@ sub cmd_pcache
    my @users = values %{ $matrix->{users_by_id} };
 
    Future->done(
-      +( map { make_username($_) . " - " . $_->state } @users ),
+      +( map { make_username($_) . " - " . $_->presence } @users ),
       scalar(@users) . " users total (from cache)"
    );
 }

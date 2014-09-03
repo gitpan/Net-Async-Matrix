@@ -22,13 +22,16 @@ EVENTS
     `%changes' will map user state field names to 2-element ARRAY
     references, each containing the old and new values of that field.
 
-  on_room_add $room
-    Invoked when a new room has completed its initial sync, either because
-    of the client's initial sync, or because it was just created or joined.
-    Note that if default `on_room_*' event handlers are defined, these may
-    have already been invoked before `on_room_add'.
+  on_room_new $room
+    Invoked when a new room first becomes known about.
 
     Passed an instance of Net::Async::Matrix::Room.
+
+  on_room_synced $room
+    Invoked when a room has completed its initial sync, either because of
+    the client's initial sync, or because it was just created or joined.
+    Note that if default `on_room_*' event handlers are defined, these may
+    have already been invoked before `on_room_synced'.
 
   on_room_del $room
     Invoked when the user has now left a room.
@@ -50,6 +53,18 @@ PARAMETERS
      $hostname:$port
 
     This string will be interpolated directly into HTTP request URLs.
+
+  SSL => BOOL
+    Whether to use SSL/TLS to communicate with the homeserver. Defaults
+    false.
+
+  SSL_* => ...
+    Any other parameters whose names begin `SSL_' will be stored for passing
+    to the HTTP user agent. See IO::Socket::SSL for more detail.
+
+  path_prefix => STRING
+    Optional. Gives the path prefix to find the Matrix client API at.
+    Normally this should not need modification.
 
   on_room_member, on_room_message => CODE
     Optional. Sets default event handlers on new room objects.
@@ -79,6 +94,10 @@ METHODS
   $user = $matrix->myself
     Returns the user object representing the connected user.
 
+  $user = $matrix->user( $user_id )
+    Returns the user object representing a user of the given ID, if defined,
+    or `undef'.
+
   ( $user_id, $access_token ) = $matrix->register( $localpart )->get
     Sends a user account registration request to the Matrix homeserver to
     create a new account. On successful completion, the returned user ID and
@@ -89,8 +108,8 @@ METHODS
     Accessor and mutator for the user account's "display name" profile
     field.
 
-  ( $state, $msg ) = $matrix->get_presence->get
-  $matrix->set_presence( $state, $msg )->get
+  ( $presence, $msg ) = $matrix->get_presence->get
+  $matrix->set_presence( $presence, $msg )->get
     Accessor and mutator for the user's current presence state and optional
     status message string.
 
@@ -126,11 +145,11 @@ USER STRUCTURES
   $displayname = $user->displayname
     Profile displayname of the user.
 
-  $state = $user->state
+  $presence = $user->presence
     Presence state. One of `offline', `unavailable' or `online'.
 
-  $presence_mtime = $user->presence_mtime
-    Epoch time that the presence state last changed.
+  $last_active = $user->last_active
+    Epoch time that the user was last active.
 
 AUTHOR
     Paul Evans <leonerd@leonerd.org.uk>

@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use Carp;
 
@@ -20,15 +20,14 @@ use Future::Utils qw( repeat );
 use JSON qw( encode_json decode_json );
 
 use Data::Dump 'pp';
-use POSIX qw( strftime );
 use Struct::Dumb;
 use Time::HiRes qw( time );
 
-struct User => [qw( user_id displayname state presence_mtime )];
+struct User => [qw( user_id displayname presence last_active )];
 
 use Net::Async::Matrix::Room;
 
-use constant PATH_PREFIX => "/matrix/client/api/v1";
+use constant PATH_PREFIX => "/_matrix/client/api/v1";
 use constant LONGPOLL_SECONDS => 30;
 
 =head1 NAME
@@ -63,14 +62,18 @@ Invoked on receipt of a user presence change event from the homeserver.
 C<%changes> will map user state field names to 2-element ARRAY references,
 each containing the old and new values of that field.
 
-=head2 on_room_add $room
+=head2 on_room_new $room
 
-Invoked when a new room has completed its initial sync, either because of the
-client's initial sync, or because it was just created or joined. Note that if
-default C<on_room_*> event handlers are defined, these may have already been
-invoked before C<on_room_add>.
+Invoked when a new room first becomes known about.
 
 Passed an instance of L<Net::Async::Matrix::Room>.
+
+=head2 on_room_synced $room
+
+Invoked when a room has completed its initial sync, either because of the
+client's initial sync, or because it was just created or joined. Note that if
+default C<on_room_*> event handlers are defined, these may have already been
+invoked before C<on_room_synced>.
 
 =head2 on_room_del $room
 
@@ -100,6 +103,20 @@ Hostname and port number to contact the homeserver at. Given in the form
 
 This string will be interpolated directly into HTTP request URLs.
 
+=head2 SSL => BOOL
+
+Whether to use SSL/TLS to communicate with the homeserver. Defaults false.
+
+=head2 SSL_* => ...
+
+Any other parameters whose names begin C<SSL_> will be stored for passing to
+the HTTP user agent. See L<IO::Socket::SSL> for more detail.
+
+=head2 path_prefix => STRING
+
+Optional. Gives the path prefix to find the Matrix client API at. Normally
+this should not need modification.
+
 =head2 on_room_member, on_room_message => CODE
 
 Optional. Sets default event handlers on new room objects.
@@ -124,11 +141,14 @@ sub _init
       $ua
    };
 
-   $self->{msgid_prefix} = strftime( '%Y%m%dT%H%M%S', localtime );
    $self->{msgid_next} = 0;
 
    $self->{users_by_id} = {};
    $self->{rooms_by_id} = {};
+
+   $self->{path_prefix} = PATH_PREFIX;
+
+   $self->{SSL_args} = {};
 }
 
 =head1 METHODS
@@ -143,11 +163,15 @@ sub configure
    my $self = shift;
    my %params = @_;
 
-   foreach (qw( user_id access_token server ua
-                on_log on_presence on_room_add on_room_del
+   foreach (qw( user_id access_token server path_prefix ua SSL
+                on_log on_presence on_room_new on_room_synced on_room_del
                 on_room_member on_room_message )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
+
+   # TODO - ideally these should be set on $ua, but for now we'll have to pass
+   # them per request; see   https://rt.cpan.org/Ticket/Display.html?id=98514
+   $self->{SSL_args}{$_} = delete $params{$_} for grep m/^SSL_/, keys %params;
 
    $self->SUPER::configure( %params );
 }
@@ -168,9 +192,9 @@ sub _uri_for_path
    $path = "/$path" unless $path =~ m{^/};
 
    my $uri = URI->new;
-   $uri->scheme( "http" );
+   $uri->scheme( $self->{SSL} ? "https" : "http" );
    $uri->authority( $self->{server} );
-   $uri->path( PATH_PREFIX . $path );
+   $uri->path( $self->{path_prefix} . $path );
 
    $params{access_token} = $self->{access_token} if defined $self->{access_token};
    $uri->query_form( %params );
@@ -183,7 +207,10 @@ sub _do_GET_json
    my $self = shift;
    my ( $path, %params ) = @_;
 
-   $self->{ua}->GET( $self->_uri_for_path( $path, %params ) )->then( sub {
+   $self->{ua}->GET(
+      $self->_uri_for_path( $path, %params ),
+      $self->{SSL} ? %{ $self->{SSL_args} } : (),
+   )->then( sub {
       my ( $response ) = @_;
 
       $response->content_type eq "application/json" or
@@ -206,6 +233,7 @@ sub _do_send_json
 
    my $f = $self->{ua}->do_request(
       request => $req,
+      $self->{SSL} ? %{ $self->{SSL_args} } : (),
    )->then( sub {
       my ( $response ) = @_;
 
@@ -289,7 +317,7 @@ sub start
                my $room = $self->_make_room( $room_id );
                $self->_incoming_event( $_ ) for @$state;
 
-               $self->maybe_invoke_event( on_room_add => $room );
+               $self->maybe_invoke_event( on_room_synced => $room );
 
                push @roomsync_f, $room->sync_messages( limit => 50 );
             }
@@ -297,6 +325,11 @@ sub start
                $self->log( "TODO: imsync returned a room invite" );
             }
             # Else: TODO something else?
+         }
+
+         # Now push use presence messages
+         foreach ( @{ $sync->{presence} } ) {
+            $self->_incoming_event( $_ );
          }
 
          Future->needs_all( @roomsync_f );
@@ -352,6 +385,7 @@ sub start_longpoll
       );
 
       $self->{ua}->GET( $uri,
+         $self->{SSL} ? %{ $self->{SSL_args} } : (),
          on_header => sub {
             my ( $header ) = @_;
 
@@ -411,6 +445,8 @@ sub _make_room
    );
    $self->add_child( $room );
 
+   $self->maybe_invoke_event( on_room_new => $room );
+
    return $room;
 }
 
@@ -433,6 +469,20 @@ sub myself
 {
    my $self = shift;
    return $self->_get_or_make_user( $self->{user_id} );
+}
+
+=head2 $user = $matrix->user( $user_id )
+
+Returns the user object representing a user of the given ID, if defined, or
+C<undef>.
+
+=cut
+
+sub user
+{
+   my $self = shift;
+   my ( $user_id ) = @_;
+   return $self->{users_by_id}{$user_id};
 }
 
 sub _incoming_event
@@ -524,9 +574,9 @@ sub set_displayname
    );
 }
 
-=head2 ( $state, $msg ) = $matrix->get_presence->get
+=head2 ( $presence, $msg ) = $matrix->get_presence->get
 
-=head2 $matrix->set_presence( $state, $msg )->get
+=head2 $matrix->set_presence( $presence, $msg )->get
 
 Accessor and mutator for the user's current presence state and optional status
 message string.
@@ -539,17 +589,17 @@ sub get_presence
 
    $self->_do_GET_json( "/presence/$self->{user_id}/status" )->then( sub {
       my ( $status ) = @_;
-      Future->done( $status->{state}, $status->{status_msg} );
+      Future->done( $status->{presence}, $status->{status_msg} );
    });
 }
 
 sub set_presence
 {
    my $self = shift;
-   my ( $state, $msg ) = @_;
+   my ( $presence, $msg ) = @_;
 
    my $status = {
-      state => $state,
+      presence => $presence,
    };
    $status->{status_msg} = $msg if defined $msg;
 
@@ -566,7 +616,7 @@ sub get_presence_list
       my @users;
       foreach my $event ( @$events ) {
          my $user = $self->_get_or_make_user( $event->{user_id} );
-         foreach (qw( state displayname )) {
+         foreach (qw( presence displayname )) {
             $user->$_ = $event->{$_} if defined $event->{$_};
          }
 
@@ -619,7 +669,7 @@ sub create_room
       my ( $content ) = @_;
 
       my $room = $self->_get_or_make_room( $content->{room_id} );
-      $self->maybe_invoke_event( on_room_add => $room );
+      $self->maybe_invoke_event( on_room_synced => $room );
       Future->done( $room, $content->{room_alias} );
    });
 }
@@ -675,17 +725,6 @@ sub room_list
       });
 }
 
-sub send_room_message
-{
-   my $self = shift;
-   my ( $roomid, $content ) = @_;
-
-   my $msgid = "$self->{msgid_prefix}-$self->{msgid_next}";
-   $self->{msgid_next}++;
-
-   $self->_do_PUT_json( "/rooms/$roomid/messages/$self->{user_id}/$msgid", $content );
-}
-
 =head2 $syncdata = $matrix->initial_sync->get( %args )
 
 Performs an IMSync operation, fetching the set of rooms the user is a member
@@ -728,7 +767,7 @@ sub _handle_event_m_presence
    my $user = $self->_get_or_make_user( $content->{user_id} );
 
    my %changes;
-   foreach (qw( displayname state )) {
+   foreach (qw( presence displayname )) {
       next unless defined $content->{$_};
       next if defined $user->$_ and $content->{$_} eq $user->$_;
 
@@ -736,9 +775,11 @@ sub _handle_event_m_presence
       $user->$_ = $content->{$_};
    }
 
-   if( defined $content->{mtime_age} ) {
-      $changes{mtime_age} = [ undef, $content->{mtime_age} ];
-      $user->presence_mtime = time() - ( $content->{mtime_age} / 1000 );
+   if( defined $content->{last_active_ago} ) {
+      my $new_last_active = time() - ( $content->{last_active_ago} / 1000 );
+
+      $changes{last_active} = [ $user->last_active, $new_last_active ];
+      $user->last_active = $new_last_active;
    }
 
    $self->maybe_invoke_event(
@@ -797,7 +838,7 @@ sub _handle_roomevent_member
          # TODO: "members" isn't enough. We want other config too...
          $room->initial_sync
             ->on_done( sub {
-               $self->maybe_invoke_event( on_room_add => $room )
+               $self->maybe_invoke_event( on_room_synced => $room )
             })
       );
    }
@@ -819,13 +860,13 @@ User ID of the user.
 
 Profile displayname of the user.
 
-=head2 $state = $user->state
+=head2 $presence = $user->presence
 
 Presence state. One of C<offline>, C<unavailable> or C<online>.
 
-=head2 $presence_mtime = $user->presence_mtime
+=head2 $last_active = $user->last_active
 
-Epoch time that the presence state last changed.
+Epoch time that the user was last active.
 
 =cut
 
