@@ -5,8 +5,15 @@ SYNOPSIS
      TODO
 
 DESCRIPTION
+    Matrix is an new open standard for interoperable Instant Messaging and
+    VoIP, providing pragmatic HTTP APIs and open source reference
+    implementations for creating and running your own real-time
+    communication infrastructure.
+
     This module allows an program to interact with a Matrix homeserver as a
     connected user client.
+
+    http://matrix.org/
 
 EVENTS
     The following events are invoked, either using subclass methods or
@@ -26,12 +33,6 @@ EVENTS
     Invoked when a new room first becomes known about.
 
     Passed an instance of Net::Async::Matrix::Room.
-
-  on_room_synced $room
-    Invoked when a room has completed its initial sync, either because of
-    the client's initial sync, or because it was just created or joined.
-    Note that if default `on_room_*' event handlers are defined, these may
-    have already been invoked before `on_room_synced'.
 
   on_room_del $room
     Invoked when the user has now left a room.
@@ -123,18 +124,6 @@ METHODS
     Requests to join an existing room with the given alias name or plain
     room ID.
 
-  $syncdata = $matrix->initial_sync->get( %args )
-    Performs an IMSync operation, fetching the set of rooms the user is a
-    member of, their current state, and an optional snapshot of the latest
-    messages there.
-
-    Takes the following named arguments:
-
-    limit => INT
-        Optional number of messages per room to return. Defaults to zero;
-        fetching only the list of rooms and their state, without any message
-        snapshots.
-
 USER STRUCTURES
     Parameters documented as `$user' receive a user struct, which supports
     the following methods:
@@ -150,6 +139,11 @@ USER STRUCTURES
 
   $last_active = $user->last_active
     Epoch time that the user was last active.
+
+SEE ALSO
+    *   http://matrix.org/ - matrix.org home page
+
+    *   https://github.com/matrix-org - matrix.org on github
 
 AUTHOR
     Paul Evans <leonerd@leonerd.org.uk>

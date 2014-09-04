@@ -10,7 +10,7 @@ use IO::Async::Loop;
 use Net::Async::Matrix;
 
 use Tickit::Async;
-use Tickit::Console 0.06; # make_widget, ->bind_key
+use Tickit::Console 0.06; # make_widget, ->bind_key, ->remove_tab
 use Tickit::Widgets qw( FloatBox Frame GridBox Static );
 Tickit::Widget::Frame->VERSION( '0.31' ); # bugfix to linetypes in constructor
 use String::Tagged 0.09;
@@ -20,6 +20,16 @@ use Getopt::Long;
 use YAML;
 use Data::Dump 'pp';
 use POSIX qw( strftime );
+
+# Monkeypatch String::Tagged so ->append_tagged is chainable
+{
+   my $code = String::Tagged->can( "append_tagged" );
+   *String::Tagged::append_tagged = sub {
+      my $self = shift;
+      $code->( $self, @_ );
+      return $self;
+   };
+}
 
 my $CONFIG = "client.yaml";
 
@@ -108,7 +118,7 @@ $loop->add( $matrix = Net::Async::Matrix->new(
       my ( $self, $room ) = @_;
       my $roomtab = delete $tabs_by_roomid{$room->room_id} or return;
 
-      $roomtab->add_line( "** TODO: THIS TAB SHOULD NOW BE DELETED **" );
+      $console->remove_tab( $roomtab );
    },
    on_error => sub {
       my ( $self, $failure, $name ) = @_;
@@ -184,9 +194,12 @@ sub new_room
    my $last_date;
 
    $room->configure(
+      on_synced_state => sub {
+         $roomtab->set_name( $room->name );
+      },
+
       on_message => sub {
          my ( $self, $member, $content ) = @_;
-         my $user = $member->user;
 
          my @time = localtime $content->{hsob_ts} / 1000;
          my $date = strftime( "%Y/%m/%d", @time );
@@ -200,18 +213,9 @@ sub new_room
          }
 
          my $s = String::Tagged->new( "" );
-         $s->append_tagged( $tstamp );
-         $s->append_tagged( " <", fg => "purple" );
-         if( defined $member->displayname ) {
-            $s->append_tagged( $member->displayname, fg => "cyan" );
-         }
-         else {
-            $s->append_tagged( $user->user_id, fg => "grey" );
-         }
-         $s->append_tagged( "> ", fg => "purple" );
-         $s->append       ( $content->{body} );
-
-         $roomtab->add_line( $s );
+         $s->append_tagged( "$tstamp " );
+         $s .= build_message( $content, $member, $s );
+         $roomtab->add_line( $s, indent => 10 );
       },
       on_member => sub {
          my ( $self, $member, %changes ) = @_;
@@ -258,8 +262,60 @@ sub new_room
          else {
             $since->set_text( "    --    " );
          }
+
+         # TODO - display this as a join/leave event in the message history.
+         # However, it's currently hard to do that during historic backfill at
+         # initialSync time. :(
       },
    );
+}
+
+sub build_message
+{
+   my ( $content, $member ) = @_;
+
+   my $s = String::Tagged->new;
+
+   my $msgtype = $content->{msgtype};
+   my $body    = $content->{body};
+
+   if( $msgtype eq "m.text" ) {
+      return $s
+         ->append_tagged( "<", fg => "purple" )
+         ->append( build_message_displayname( $member ) )
+         ->append_tagged( "> ", fg => "purple" )
+         ->append       ( $body );
+   }
+   elsif( $msgtype eq "m.emote" ) {
+      return $s
+         ->append_tagged( "* ", fg => "purple" )
+         ->append( build_message_displayname( $member ) )
+         ->append_tagged( " " )
+         ->append       ( $body );
+   }
+   else {
+      return $s
+         ->append_tagged( "[" )
+         ->append_tagged( $msgtype, fg => "yellow" )
+         ->append_tagged( " from " )
+         ->append( build_message_displayname( $member ) )
+         ->append_tagged( "]: " )
+         ->append       ( pp $body );
+   }
+}
+
+sub build_message_displayname
+{
+   my ( $member ) = @_;
+
+   if( defined $member->displayname ) {
+      return String::Tagged->new
+         ->append_tagged( $member->displayname, fg => "cyan" );
+   }
+   else {
+      return String::Tagged->new
+         ->append_tagged ( $member->user->user_id, fg => "grey" );
+   }
 }
 
 if( defined $config->{user_id} ) {

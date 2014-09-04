@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use Carp;
 
@@ -37,6 +37,15 @@ single Matrix room.
 
 The following events are invoked, either using subclass methods or C<CODE>
 references in parameters:
+
+=head2 on_synced_state
+
+Invoked after the initial sync of the room has been completed as far as the
+state, but before message history is replayed.
+
+=head2 on_synced_messages
+
+Invoked after message history sync has been replayed.
 
 =head2 on_message $member, $content
 
@@ -68,7 +77,7 @@ sub configure
    my $self = shift;
    my %params = @_;
 
-   foreach (qw( on_message on_member )) {
+   foreach (qw( on_message on_member on_synced_state on_synced_messages )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
 
@@ -93,13 +102,27 @@ sub room_id
    return $self->{room_id};
 }
 
+=head2 $name = $room->name
+
+Returns the room name, if defined, otherwise the opaque room ID.
+
+=cut
+
+sub name
+{
+   my $self = shift;
+   return $self->{name} || $self->room_id;
+}
+
 sub initial_sync
 {
    my $self = shift;
 
    $self->{initial_sync} ||= Future->needs_all(
       $self->sync_members,
-   );
+   )->on_done( sub {
+      $self->maybe_invoke_event( on_synced_state => );
+   });
 }
 
 sub sync_messages
@@ -131,6 +154,7 @@ sub sync_messages
          }
       }
 
+      $self->maybe_invoke_event( on_synced_messages => );
       Future->done( $self );
    });
 }
@@ -233,13 +257,31 @@ sub _get_or_make_member
    return $self->{members_by_userid}{$user_id} ||= Member( $user, undef, undef );
 }
 
+sub _handle_roomevent_create
+{
+   my $self = shift;
+   my ( $event ) = @_;
+
+   # Nothing interesting here...
+}
+
+sub _handle_roomevent_name
+{
+   my $self = shift;
+   my ( $event ) = @_;
+   my $content = $event->{content};
+
+   $self->{name} = $content->{name};
+}
+
 sub _handle_roomevent_config
 {
    my $self = shift;
    my ( $event ) = @_;
    my $content = $event->{content};
 
-   # TODO: do we even /get/ this any more?
+   defined $content->{$_} and $self->{$_} = $content->{$_}
+      for qw( visibility room_alias_name );
 }
 
 sub _handle_roomevent_message

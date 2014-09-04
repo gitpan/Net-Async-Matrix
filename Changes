@@ -1,5 +1,11 @@
 Revision history for Net-Async-Matrix
 
+0.04    2014/09/04 18:10:00
+        [CHANGES]
+         * Many and various improvements to the display of the sample client
+         * Added 'on_synced_*' events to Room objects, removed 'on_room_synced'
+           from Matrix object
+
 0.03    2014/09/03 16:30:54
         [CHANGES]
          * Many more updates for current Matrix API

@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use Carp;
 
@@ -40,8 +40,14 @@ C<Net::Async::Matrix> - use Matrix with L<IO::Async>
 
 =head1 DESCRIPTION
 
+F<Matrix> is an new open standard for interoperable Instant Messaging and VoIP,
+providing pragmatic HTTP APIs and open source reference implementations for
+creating and running your own real-time communication infrastructure.
+
 This module allows an program to interact with a Matrix homeserver as a
 connected user client.
+
+L<http://matrix.org/>
 
 =cut
 
@@ -67,13 +73,6 @@ each containing the old and new values of that field.
 Invoked when a new room first becomes known about.
 
 Passed an instance of L<Net::Async::Matrix::Room>.
-
-=head2 on_room_synced $room
-
-Invoked when a room has completed its initial sync, either because of the
-client's initial sync, or because it was just created or joined. Note that if
-default C<on_room_*> event handlers are defined, these may have already been
-invoked before C<on_room_synced>.
 
 =head2 on_room_del $room
 
@@ -164,7 +163,7 @@ sub configure
    my %params = @_;
 
    foreach (qw( user_id access_token server path_prefix ua SSL
-                on_log on_presence on_room_new on_room_synced on_room_del
+                on_log on_presence on_room_new on_room_del
                 on_room_member on_room_message )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
@@ -301,7 +300,7 @@ sub start
       my $f = $self->get_current_event_token->then( sub {
          ( $event_token ) = @_;
 
-         $self->initial_sync
+         $self->_do_GET_json( "/initialSync", limit => 0 )
       })->then( sub {
          my ( $sync ) = @_;
 
@@ -317,7 +316,7 @@ sub start
                my $room = $self->_make_room( $room_id );
                $self->_incoming_event( $_ ) for @$state;
 
-               $self->maybe_invoke_event( on_room_synced => $room );
+               $room->maybe_invoke_event( on_synced_state => );
 
                push @roomsync_f, $room->sync_messages( limit => 50 );
             }
@@ -669,7 +668,9 @@ sub create_room
       my ( $content ) = @_;
 
       my $room = $self->_get_or_make_room( $content->{room_id} );
-      $self->maybe_invoke_event( on_room_synced => $room );
+      # TODO this isn't synced yet but the server won't tell us when it is :(
+      $room->maybe_invoke_event( on_synced_state => );
+      $room->maybe_invoke_event( on_synced_messages => );
       Future->done( $room, $content->{room_alias} );
    });
 }
@@ -703,6 +704,7 @@ sub join_room
       my ( $room_id ) = @_;
       my $room = $self->_get_or_make_room( $room_id );
       $room->initial_sync
+         ->then( sub { $room->sync_messages } );
    });
 }
 
@@ -723,37 +725,6 @@ sub room_list
          my ( $response ) = @_;
          Future->done( pp($response) );
       });
-}
-
-=head2 $syncdata = $matrix->initial_sync->get( %args )
-
-Performs an IMSync operation, fetching the set of rooms the user is a member
-of, their current state, and an optional snapshot of the latest messages
-there.
-
-Takes the following named arguments:
-
-=over 4
-
-=item limit => INT
-
-Optional number of messages per room to return. Defaults to zero; fetching
-only the list of rooms and their state, without any message snapshots.
-
-=back
-
-=cut
-
-sub initial_sync
-{
-   my $self = shift;
-   my %args = @_;
-
-   $args{limit} //= 0;
-
-   $self->_do_GET_json( "/initialSync",
-      limit => $args{limit},
-   );
 }
 
 ## Incoming events
@@ -821,7 +792,8 @@ sub _handle_event_m_room
       unshift @subtype_parts, pop @type_parts;
    }
 
-   $self->log( "Unhandled room event " . join "_", @subtype_parts );
+   $self->log( "Unhandled room event " . join( "_", @subtype_parts ) . "\n" .
+      pp( $event ) );
 }
 
 sub _handle_roomevent_member
@@ -837,9 +809,6 @@ sub _handle_roomevent_member
       $self->adopt_future(
          # TODO: "members" isn't enough. We want other config too...
          $room->initial_sync
-            ->on_done( sub {
-               $self->maybe_invoke_event( on_room_synced => $room )
-            })
       );
    }
    else {
@@ -867,6 +836,22 @@ Presence state. One of C<offline>, C<unavailable> or C<online>.
 =head2 $last_active = $user->last_active
 
 Epoch time that the user was last active.
+
+=cut
+
+=head1 SEE ALSO
+
+=over 4
+
+=item *
+
+L<http://matrix.org/> - matrix.org home page
+
+=item *
+
+L<https://github.com/matrix-org> - matrix.org on github
+
+=back
 
 =cut
 

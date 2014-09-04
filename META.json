@@ -34,11 +34,11 @@
    "provides" : {
       "Net::Async::Matrix" : {
          "file" : "lib/Net/Async/Matrix.pm",
-         "version" : "0.03"
+         "version" : "0.04"
       },
       "Net::Async::Matrix::Room" : {
          "file" : "lib/Net/Async/Matrix/Room.pm",
-         "version" : "0.03"
+         "version" : "0.04"
       }
    },
    "release_status" : "stable",
@@ -47,5 +47,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.03"
+   "version" : "0.04"
 }
