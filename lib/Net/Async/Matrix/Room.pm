@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use Carp;
 
@@ -51,12 +51,14 @@ Invoked after message history sync has been replayed.
 
 Invoked on receipt of a new message from the given member.
 
-=head2 on_member $member, %changes
+=head2 on_membership $member, %changes
 
-Invoked when a member of the room changes state somehow. The C<$member> object
-will already be in the new state. C<%changes> will be a key/value list of
-state fields names that were changed, and references to 2-element ARRAYs
-containing the old and new values for this field.
+=head2 on_presence $member, %changes
+
+Invoked when a member of the room changes membership or presence state. The
+C<$member> object will already be in the new state. C<%changes> will be a
+key/value list of state fields names that were changed, and references to
+2-element ARRAYs containing the old and new values for this field.
 
 =cut
 
@@ -77,7 +79,8 @@ sub configure
    my $self = shift;
    my %params = @_;
 
-   foreach (qw( on_message on_member on_synced_state on_synced_messages )) {
+   foreach (qw( on_message on_membership on_presence
+         on_synced_state on_synced_messages )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
 
@@ -146,11 +149,11 @@ sub sync_messages
          next unless my ( $subtype ) = ( $event->{type} =~ m/^m\.room\.(.*)$/ );
          $subtype =~ s/\./_/g;
 
-         if( my $code = $self->can( "_handle_roomevent_$subtype" ) ) {
+         if( my $code = $self->can( "_handle_roomevent_${subtype}_forward" ) ) {
             $code->( $self, $event );
          }
          else {
-            ::log( "TODO: Handle room event $subtype" );
+            $matrix->log( "TODO: Handle room event $subtype" );
          }
       }
 
@@ -170,7 +173,7 @@ sub sync_members
 
       foreach my $event ( @{ $response->{chunk} } ) {
          # These look like normal events
-         $self->_handle_roomevent_member( $event );
+         $self->_handle_roomevent_member_forward( $event );
       }
 
       Future->done( $self );
@@ -257,7 +260,7 @@ sub _get_or_make_member
    return $self->{members_by_userid}{$user_id} ||= Member( $user, undef, undef );
 }
 
-sub _handle_roomevent_create
+sub _handle_roomevent_create_forward
 {
    my $self = shift;
    my ( $event ) = @_;
@@ -265,7 +268,7 @@ sub _handle_roomevent_create
    # Nothing interesting here...
 }
 
-sub _handle_roomevent_name
+sub _handle_roomevent_name_forward
 {
    my $self = shift;
    my ( $event ) = @_;
@@ -274,7 +277,7 @@ sub _handle_roomevent_name
    $self->{name} = $content->{name};
 }
 
-sub _handle_roomevent_config
+sub _handle_roomevent_config_forward
 {
    my $self = shift;
    my ( $event ) = @_;
@@ -284,7 +287,7 @@ sub _handle_roomevent_config
       for qw( visibility room_alias_name );
 }
 
-sub _handle_roomevent_message
+sub _handle_roomevent_message_forward
 {
    my $self = shift;
    my ( $event ) = @_;
@@ -300,7 +303,7 @@ sub _handle_roomevent_message
       $member, $event->{content} );
 }
 
-sub _handle_roomevent_member
+sub _handle_roomevent_member_forward
 {
    my $self = shift;
    my ( $event ) = @_;
@@ -319,7 +322,7 @@ sub _handle_roomevent_member
       $member->$_ = $content->{$_};
    }
 
-   $self->maybe_invoke_event( on_member => $member, %changes );
+   $self->maybe_invoke_event( on_membership => $member, %changes );
 
    delete $self->{members_by_userid}{$user_id} if $content->{membership} eq "leave";
 
@@ -338,7 +341,7 @@ sub _handle_event_m_presence
    $changes{$_} and $member->$_ = $changes{$_}[1]
       for qw( displayname );
 
-   $self->maybe_invoke_event( on_member => $member, %changes );
+   $self->maybe_invoke_event( on_presence => $member, %changes );
 }
 
 =head1 MEMBERSHIP STRUCTURES

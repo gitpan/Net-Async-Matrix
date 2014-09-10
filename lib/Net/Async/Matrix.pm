@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use Carp;
 
@@ -297,12 +297,10 @@ sub start
    return $self->{start_f} ||= do {
       my $event_token;
 
-      my $f = $self->get_current_event_token->then( sub {
-         ( $event_token ) = @_;
-
-         $self->_do_GET_json( "/initialSync", limit => 0 )
-      })->then( sub {
+      my $f = $self->_do_GET_json( "/initialSync", limit => 0 )
+      ->then( sub {
          my ( $sync ) = @_;
+         $event_token = $sync->{end};
 
          my @roomsync_f;
 
@@ -383,24 +381,19 @@ sub start_longpoll
          timeout => LONGPOLL_SECONDS * 1000, # msec
       );
 
-      $self->{ua}->GET( $uri,
-         $self->{SSL} ? %{ $self->{SSL_args} } : (),
-         on_header => sub {
-            my ( $header ) = @_;
+      Future->wait_any(
+         $self->loop->timeout_future( after => LONGPOLL_SECONDS + 5 ),
 
-            my $json = JSON->new;
-            return sub {
-               my ( $data ) = @_ or return $header;
+         $self->{ua}->GET( $uri,
+            $self->{SSL} ? %{ $self->{SSL_args} } : (),
+         )->then( sub {
+            my ( $response ) = @_;
+            my $data = decode_json( $response->content );
+            $self->_incoming_event( $_ ) foreach @{ $data->{chunk} };
+            $self->{longpoll_last_token} = $data->{end};
 
-               $header->add_content( $data );
-
-               foreach my $chunk ( $json->incr_parse( $data ) ) {
-                  $self->_incoming_event( $_ ) foreach @{ $chunk->{chunk} };
-
-                  $self->{longpoll_last_token} = $chunk->{end};
-               }
-            }
-         },
+            Future->done();
+         }),
       )->else( sub {
          my ( $failure ) = @_;
          warn "Longpoll failed - $failure\n";
@@ -784,7 +777,7 @@ sub _handle_event_m_room
 
    my @subtype_parts;
    while( @type_parts ) {
-      if( my $code = $handler->can( "_handle_roomevent_" . join "_", @type_parts ) ) {
+      if( my $code = $handler->can( "_handle_roomevent_" . join "_", @type_parts, "forward" ) ) {
          $code->( $handler, @subtype_parts, $event );
          return;
       }
@@ -796,7 +789,7 @@ sub _handle_event_m_room
       pp( $event ) );
 }
 
-sub _handle_roomevent_member
+sub _handle_roomevent_member_forward
 {
    my $self = shift;
    my $event = pop;

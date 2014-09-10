@@ -1,5 +1,16 @@
 Revision history for Net-Async-Matrix
 
+0.05    2014/09/10 11:25:22
+        [CHANGES]
+         * Split room 'on_member' events into separate events for membership
+           vs. presence
+         * Various neatenings and improvements in included 'client.pl' script
+
+        [BUGFIXES]
+         * Apply a timeout for longpoll so we don't end up waiting forever
+         * Invoke ->log method of containing $matrix object, not toplevel
+           main::log()
+
 0.04    2014/09/04 18:10:00
         [CHANGES]
          * Many and various improvements to the display of the sample client

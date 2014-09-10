@@ -10,26 +10,15 @@ use IO::Async::Loop;
 use Net::Async::Matrix;
 
 use Tickit::Async;
-use Tickit::Console 0.06; # make_widget, ->bind_key, ->remove_tab
+use Tickit::Console 0.07; # time/datestamp format
 use Tickit::Widgets qw( FloatBox Frame GridBox Static );
 Tickit::Widget::Frame->VERSION( '0.31' ); # bugfix to linetypes in constructor
-use String::Tagged 0.09;
+use String::Tagged 0.10; # ->append_tagged chainable
 
 use Getopt::Long;
 
 use YAML;
 use Data::Dump 'pp';
-use POSIX qw( strftime );
-
-# Monkeypatch String::Tagged so ->append_tagged is chainable
-{
-   my $code = String::Tagged->can( "append_tagged" );
-   *String::Tagged::append_tagged = sub {
-      my $self = shift;
-      $code->( $self, @_ );
-      return $self;
-   };
-}
 
 my $CONFIG = "client.yaml";
 
@@ -37,13 +26,45 @@ GetOptions(
    "C|config=s" => \$CONFIG,
    "S|server=s" => \my $SERVER,
    "ssl+"       => \my $SSL,
+   "D|dump-requests" => \my $DUMP_REQUESTS,
 ) or exit 1;
 
 my $loop = IO::Async::Loop->new;
 
-my $console = Tickit::Console->new;
+my $console = Tickit::Console->new(
+   timestamp_format => String::Tagged->new_tagged( "%H:%M ", fg => undef )
+      ->apply_tag( 0, 5, fg => "blue" ),
+   datestamp_format => String::Tagged->new_tagged( "-- day is now %Y/%m/%d --",
+      fg => "grey" ),
+);
 
 my $matrix;
+
+if( $DUMP_REQUESTS ) {
+   open my $requests_fh, ">>", "requests.log" or die "Cannot write requests.log - $!";
+   $requests_fh->autoflush;
+
+   require Net::Async::HTTP;
+   require Class::Method::Modifiers;
+
+   Class::Method::Modifiers::install_modifier( "Net::Async::HTTP",
+      around => _do_request => sub {
+         my ( $orig, $self, %args ) = @_;
+         my $request = $args{request};
+
+         my $request_uri = $request->uri;
+         return $orig->( $self, %args )
+            ->on_done( sub {
+               my ( $response ) = @_;
+
+               my $data = eval { pp JSON::decode_json( $response->content ) };
+
+               print $requests_fh "Response from $request_uri:\n";
+               print $requests_fh "  $_\n" for split m/\n/, $data // $response->content;
+            });
+      }
+   );
+}
 
 my %PRESENCE_STATE_TO_COLOUR = (
    offline     => "grey",
@@ -54,11 +75,11 @@ my %PRESENCE_STATE_TO_COLOUR = (
 # Eugh...
 my $globaltab;
 
-sub add_line_colour
+sub append_line_colour
 {
    my ( $fg, $text ) = @_;
 
-   $globaltab->add_line(
+   $globaltab->append_line(
       String::Tagged->new( $text )->apply_tag( 0, -1, fg => $fg )
    );
 }
@@ -66,7 +87,7 @@ sub add_line_colour
 sub log
 {
    my ( $line ) = @_;
-   add_line_colour( green => ">> $line" );
+   append_line_colour( green => ">> $line" );
 }
 
 $globaltab = $console->add_tab(
@@ -104,10 +125,10 @@ $loop->add( $matrix = Net::Async::Matrix->new(
       my ( $self, $user, %changes ) = @_;
 
       if( exists $changes{presence} ) {
-         add_line_colour( yellow => " * ".make_username($user)." now " . $user->presence );
+         append_line_colour( yellow => " * ".make_username($user)." now " . $user->presence );
       }
       elsif( exists $changes{displayname} ) {
-         add_line_colour( yellow => " * $changes{displayname}[0] is now called ".make_username($user) );
+         append_line_colour( yellow => " * $changes{displayname}[0] is now called ".make_username($user) );
       }
    },
    on_room_new => sub {
@@ -123,12 +144,12 @@ $loop->add( $matrix = Net::Async::Matrix->new(
    on_error => sub {
       my ( $self, $failure, $name ) = @_;
 
-      add_line_colour( red => "Error: $failure" );
+      append_line_colour( red => "Error: $failure" );
 
       if( $name eq "http" ) {
          my ( undef, undef, undef, $response, $request ) = @_;
-         add_line_colour( red => "  ".$request->uri->path_query );
-         add_line_colour( red => "  ".$response->content );
+         append_line_colour( red => "  ".$request->uri->path_query );
+         append_line_colour( red => "  ".$response->content );
       }
    },
 ));
@@ -138,6 +159,12 @@ sub new_room
    my ( $room ) = @_;
 
    my $floatbox;
+
+   # Until Tickit::Widget::Tabbed supports a 'tab_class' argument to add_tab,
+   # we'll have to cheat
+   no warnings 'redefine';
+   local *Tickit::Widget::Tabbed::TAB_CLASS = sub { "RoomTab" };
+
    my $roomtab = $console->add_tab(
       name => $room->room_id,
       make_widget => sub {
@@ -153,169 +180,16 @@ sub new_room
             do_command( $line, $tab );
          }
          else {
-            $room->send_message( $line );
+            $room->adopt_future( $room->send_message( $line ) );
          }
       },
    );
    $tabs_by_roomid{$room->room_id} = $roomtab;
 
-   my $presence_table = Tickit::Widget::GridBox->new(
-      col_spacing => 1,
+   $roomtab->_setup(
+      room     => $room,
+      floatbox => $floatbox,
    );
-
-   my @presence_userids;
-   $presence_table->add( 0, 0, Tickit::Widget::Static->new( text => "Name" ) );
-   $presence_table->add( 0, 1, Tickit::Widget::Static->new( text => "Since" ) );
-
-   my $presence_float = $floatbox->add_float(
-      child => Tickit::Widget::Frame->new(
-         style => {
-            linetype => "none",
-            linetype_left => "single",
-
-            frame_fg => "white", frame_bg => "purple",
-         },
-         child => $presence_table,
-      ),
-
-      top => 0, bottom => -1, right => -1,
-      left => -40,
-
-      # Initially hidden
-      hidden => 1,
-   );
-
-   my $visible = 0;
-   $roomtab->bind_key( 'F2' => sub {
-      $visible ? ( $presence_float->hide, $visible = 0 )
-               : ( $presence_float->show, $visible = 1 );
-   });
-
-   my $last_date;
-
-   $room->configure(
-      on_synced_state => sub {
-         $roomtab->set_name( $room->name );
-      },
-
-      on_message => sub {
-         my ( $self, $member, $content ) = @_;
-
-         my @time = localtime $content->{hsob_ts} / 1000;
-         my $date = strftime( "%Y/%m/%d", @time );
-         my $tstamp = strftime( "[%H:%M]", @time );
-
-         if( !defined $last_date or $date ne $last_date ) {
-            my $dateline = String::Tagged->new( "-- day is now $date --" )
-               ->apply_tag( 0, -1, fg => "grey" );
-            $roomtab->add_line( $dateline );
-            $last_date = $date;
-         }
-
-         my $s = String::Tagged->new( "" );
-         $s->append_tagged( "$tstamp " );
-         $s .= build_message( $content, $member, $s );
-         $roomtab->add_line( $s, indent => 10 );
-      },
-      on_member => sub {
-         my ( $self, $member, %changes ) = @_;
-
-         # Ignore invited users
-         return if $member->membership eq "invite";
-
-         my $user = $member->user;
-
-         my $user_id = $user->user_id;
-
-         # Find an existing row if we can
-         my $rowidx;
-         $presence_userids[$_] eq $user_id and $rowidx = $_, last
-            for 0 .. $#presence_userids;
-
-         if( defined $rowidx and $member->membership eq "leave" ) {
-            splice @presence_userids, $rowidx, 1, ();
-            $presence_table->delete_row( $rowidx+1 );
-            return;
-         }
-
-         my ( $name, $since );
-         if( defined $rowidx ) {
-            ( $name, $since ) = $presence_table->get_row( $rowidx+1 );
-         }
-         else {
-            $presence_table->append_row( [
-               $name = Tickit::Widget::Static->new( text => "" ),
-               $since = Tickit::Widget::Static->new( text => "" ),
-            ] );
-            push @presence_userids, $user_id;
-         }
-
-         $name->set_style( fg => $PRESENCE_STATE_TO_COLOUR{$user->presence} )
-            if defined $user->presence;
-         $name->set_text(
-            defined $member->displayname ? $member->displayname : "[".$user->user_id."]"
-         );
-
-         if( defined $user->last_active ) {
-            $since->set_text( strftime "%Y/%m/%d %H:%M", localtime $user->last_active );
-         }
-         else {
-            $since->set_text( "    --    " );
-         }
-
-         # TODO - display this as a join/leave event in the message history.
-         # However, it's currently hard to do that during historic backfill at
-         # initialSync time. :(
-      },
-   );
-}
-
-sub build_message
-{
-   my ( $content, $member ) = @_;
-
-   my $s = String::Tagged->new;
-
-   my $msgtype = $content->{msgtype};
-   my $body    = $content->{body};
-
-   if( $msgtype eq "m.text" ) {
-      return $s
-         ->append_tagged( "<", fg => "purple" )
-         ->append( build_message_displayname( $member ) )
-         ->append_tagged( "> ", fg => "purple" )
-         ->append       ( $body );
-   }
-   elsif( $msgtype eq "m.emote" ) {
-      return $s
-         ->append_tagged( "* ", fg => "purple" )
-         ->append( build_message_displayname( $member ) )
-         ->append_tagged( " " )
-         ->append       ( $body );
-   }
-   else {
-      return $s
-         ->append_tagged( "[" )
-         ->append_tagged( $msgtype, fg => "yellow" )
-         ->append_tagged( " from " )
-         ->append( build_message_displayname( $member ) )
-         ->append_tagged( "]: " )
-         ->append       ( pp $body );
-   }
-}
-
-sub build_message_displayname
-{
-   my ( $member ) = @_;
-
-   if( defined $member->displayname ) {
-      return String::Tagged->new
-         ->append_tagged( $member->displayname, fg => "cyan" );
-   }
-   else {
-      return String::Tagged->new
-         ->append_tagged ( $member->user->user_id, fg => "grey" );
-   }
 }
 
 if( defined $config->{user_id} ) {
@@ -329,7 +203,7 @@ if( defined $config->{user_id} ) {
 
 $SIG{__WARN__} = sub {
    my $msg = join " ", @_;
-   add_line_colour( orange => join " ", @_ );
+   append_line_colour( orange => join " ", @_ );
 };
 
 $tickit->run;
@@ -356,7 +230,7 @@ sub do_command
    # For now all commands are simple methods on __PACKAGE__
    my ( $cmd, @args ) = split m/\s+/, $line;
 
-   $tab->add_line(
+   $tab->append_line(
       String::Tagged->new( '$ ' . join " ", $cmd, @args )
          ->apply_tag( 0, -1, fg => "cyan" )
    );
@@ -365,14 +239,14 @@ sub do_command
    $cmd_f = Future->call( sub { __PACKAGE__->$method( @args ) } )
       ->on_done( sub {
          my @result = @_;
-         $tab->add_line( $_ ) for @result;
+         $tab->append_line( $_ ) for @result;
 
          undef $cmd_f;
       })
       ->on_fail( sub {
          my ( $failure ) = @_;
 
-         $tab->add_line(
+         $tab->append_line(
             String::Tagged->new( "Error: $failure" )
                ->apply_tag( 0, -1, fg => "red" )
          );
@@ -501,4 +375,179 @@ sub cmd_msg
 
    my $msg = join " ", @msg;
    $matrix->send_room_message( $roomid, $msg )->then_done(); # suppress output
+}
+
+package RoomTab {
+   use base qw( Tickit::Console::Tab );
+
+   use POSIX qw( strftime );
+
+   sub _setup
+   {
+      my $self = shift;
+      my %args = @_;
+
+      my $room     = $args{room};
+      my $floatbox = $args{floatbox};
+
+      $self->{presence_table} = my $presence_table = Tickit::Widget::GridBox->new(
+         col_spacing => 1,
+      );
+
+      $self->{presence_userids} = \my @presence_userids;
+      $presence_table->add( 0, 0, Tickit::Widget::Static->new( text => "Name" ) );
+      $presence_table->add( 0, 1, Tickit::Widget::Static->new( text => "Since" ) );
+
+      my $presence_float = $floatbox->add_float(
+         child => Tickit::Widget::Frame->new(
+            style => {
+               linetype => "none",
+               linetype_left => "single",
+
+               frame_fg => "white", frame_bg => "purple",
+            },
+            child => $presence_table,
+         ),
+
+         top => 0, bottom => -1, right => -1,
+         left => -40,
+
+         # Initially hidden
+         hidden => 1,
+      );
+
+      my $visible = 0;
+      $self->bind_key( 'F2' => sub {
+         $visible ? ( $presence_float->hide, $visible = 0 )
+                  : ( $presence_float->show, $visible = 1 );
+      });
+
+      $room->configure(
+         on_synced_state => sub {
+            $self->set_name( $room->name );
+         },
+
+         on_message => sub {
+            my ( undef, $member, $content ) = @_;
+
+            $self->append_line( build_message( $content, $member ),
+               indent => 10,
+               time   => $content->{hsob_ts} / 1000,
+            );
+         },
+         on_membership => sub {
+            my ( undef, $member, %changes ) = @_;
+
+            # Ignore invited users
+            return if $member->membership eq "invite";
+
+            $self->update_member_presence( $member );
+
+            # TODO - display this as a join/leave event in the message history.
+            # However, it's currently hard to do that during historic backfill at
+            # initialSync time. :(
+         },
+         on_presence => sub {
+            my ( undef, $member, %changes ) = @_;
+            $self->update_member_presence( $member );
+         },
+      );
+   }
+
+   sub update_member_presence
+   {
+      my $self = shift;
+      my ( $member ) = @_;
+
+      my $user = $member->user;
+      my $user_id = $user->user_id;
+
+      my $presence_userids = $self->{presence_userids};
+
+      # Find an existing row if we can
+      my $rowidx;
+      $presence_userids->[$_] eq $user_id and $rowidx = $_, last
+         for 0 .. $#$presence_userids;
+
+      my $presence_table = $self->{presence_table};
+
+      if( defined $rowidx and $member->membership eq "leave" ) {
+         splice @$presence_userids, $rowidx, 1, ();
+         $presence_table->delete_row( $rowidx+1 );
+         return;
+      }
+
+      my ( $name, $since );
+      if( defined $rowidx ) {
+         ( $name, $since ) = $presence_table->get_row( $rowidx+1 );
+      }
+      else {
+         $presence_table->append_row( [
+            $name = Tickit::Widget::Static->new( text => "" ),
+            $since = Tickit::Widget::Static->new( text => "" ),
+         ] );
+         push @$presence_userids, $user_id;
+      }
+
+      $name->set_style( fg => $PRESENCE_STATE_TO_COLOUR{$user->presence} )
+         if defined $user->presence;
+      $name->set_text(
+         defined $member->displayname ? $member->displayname : "[".$user->user_id."]"
+      );
+
+      if( defined $user->last_active ) {
+         $since->set_text( strftime "%Y/%m/%d %H:%M", localtime $user->last_active );
+      }
+      else {
+         $since->set_text( "    --    " );
+      }
+   }
+
+   sub build_message
+   {
+      my ( $content, $member ) = @_;
+
+      my $s = String::Tagged->new;
+
+      my $msgtype = $content->{msgtype};
+      my $body    = $content->{body};
+
+      if( $msgtype eq "m.text" ) {
+         return $s
+            ->append_tagged( "<", fg => "purple" )
+            ->append( build_message_displayname( $member ) )
+            ->append_tagged( "> ", fg => "purple" )
+            ->append       ( $body );
+      }
+      elsif( $msgtype eq "m.emote" ) {
+         return $s
+            ->append_tagged( "* ", fg => "purple" )
+            ->append( build_message_displayname( $member ) )
+            ->append_tagged( " " )
+            ->append       ( $body );
+      }
+      else {
+         return $s
+            ->append_tagged( "[" )
+            ->append_tagged( $msgtype, fg => "yellow" )
+            ->append_tagged( " from " )
+            ->append( build_message_displayname( $member ) )
+            ->append_tagged( "]: " )
+            ->append       ( Data::Dump::pp $body );
+      }
+   }
+
+   sub build_message_displayname
+   {
+      my ( $member ) = @_;
+
+      if( defined $member->displayname ) {
+         return String::Tagged->new
+            ->append_tagged( $member->displayname, fg => "cyan" );
+      }
+      else {
+         return String::Tagged->new
+            ->append_tagged ( $member->user->user_id, fg => "grey" );
+      }
+   }
 }
