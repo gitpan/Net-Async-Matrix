@@ -2,7 +2,21 @@ NAME
     `Net::Async::Matrix' - use Matrix with IO::Async
 
 SYNOPSIS
-     TODO
+     use Net::Async::Matrix;
+     use IO::Async::Loop;
+
+     my $loop = IO::Async::Loop->new;
+
+     my $matrix = Net::Async::Matrix->new(
+        server => "my.home.server",
+     );
+
+     $loop->add( $matrix );
+
+     $matrix->login(
+        user     => '@my-user:home.server',
+        password => 'SeKr1t',
+     )->get;
 
 DESCRIPTION
     Matrix is an new open standard for interoperable Instant Messaging and
@@ -73,6 +87,24 @@ PARAMETERS
 METHODS
     The following methods documented with a trailing call to `->get' return
     Future instances.
+
+  $matrix->login( %params )->get
+    Performs the necessary steps required to authenticate with the
+    configured Home Server, actually obtain an access token and starting the
+    event stream. The returned `Future' will eventually yield the `$matrix'
+    object itself, so it can be easily chained.
+
+    There are various methods of logging in supported by Matrix; the
+    following sets of arguments determine which is used:
+
+    user_id, password
+        Log in via the `m.login.password' method.
+
+    user_id, access_token
+        Directly sets the `user_id' and `access_token' fields, bypassing the
+        usual login semantics. This presumes you already have an existing
+        access token to re-use, obtained by some other mechanism. This
+        exists largely for testing purposes.
 
   $f = $matrix->start
     Performs the initial IMSync on the server, and starts the event stream

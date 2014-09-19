@@ -11,12 +11,13 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 use Carp;
 
 use Future;
 
+use List::Util qw( pairmap );
 use Struct::Dumb;
 use Time::HiRes qw( time );
 
@@ -41,17 +42,41 @@ references in parameters:
 =head2 on_synced_state
 
 Invoked after the initial sync of the room has been completed as far as the
-state, but before message history is replayed.
-
-=head2 on_synced_messages
-
-Invoked after message history sync has been replayed.
+state.
 
 =head2 on_message $member, $content
 
-Invoked on receipt of a new message from the given member.
+=head2 on_back_message $member, $content
 
-=head2 on_membership $member, %changes
+Invoked on receipt of a new message from the given member, either "live" from
+the event stream, or from backward pagination.
+
+=head2 on_membership $member, $event, %changes
+
+=head2 on_back_membership $member, $event, %changes
+
+Invoked on receipt of a membership change event for the given member, either
+"live" from the event stream, or from backward pagination. C<%changes> will be
+a key/value list of state field names that were changed, whose values are
+2-element ARRAY references containing the before/after values of those fields.
+
+ on_membership:      $field_name => [ $old_value, $new_value ]
+ on_back_membership: $field_name => [ $new_value, $old_value ]
+
+Note carefully that the second value in each array gives the "updated" value,
+in the direction of the change - that is, for C<on_membership> it gives the
+new value after the change but for C<on_back_message> it gives the old value
+before. Fields whose values did not change are not present in the C<%changes>
+list; the values of these can be inspected on the C<$member> object.
+
+It is unspecified what values the C<$member> object has for fields present in
+the change list - client code should not rely on these fields.
+
+=head2 on_state_changed $member, $event, %changes
+
+=head2 on_back_state_changed $member, $event, %changes
+
+Invoked on receipt of a change of room state (such as name or topic).
 
 =head2 on_presence $member, %changes
 
@@ -71,6 +96,7 @@ sub _init
    $self->{matrix}  = delete $params->{matrix};
    $self->{room_id} = delete $params->{room_id};
 
+   $self->{state} = {};
    $self->{members_by_userid} = {};
 }
 
@@ -79,8 +105,8 @@ sub configure
    my $self = shift;
    my %params = @_;
 
-   foreach (qw( on_message on_membership on_presence
-         on_synced_state on_synced_messages )) {
+   foreach (qw( on_message on_back_message on_membership on_back_membership
+         on_presence on_synced_state on_state_changed on_back_state_changed )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
 
@@ -114,7 +140,19 @@ Returns the room name, if defined, otherwise the opaque room ID.
 sub name
 {
    my $self = shift;
-   return $self->{name} || $self->room_id;
+   return $self->{state}{name} || $self->room_id;
+}
+
+=head2 $topic = $room->topic
+
+Returns the room topic, if defined
+
+=cut
+
+sub topic
+{
+   my $self = shift;
+   return $self->{state}{topic};
 }
 
 sub initial_sync
@@ -128,40 +166,6 @@ sub initial_sync
    });
 }
 
-sub sync_messages
-{
-   my $self = shift;
-   my %args = @_;
-
-   my $limit = $args{limit} // 20;
-
-   my $matrix = $self->{matrix};
-
-   $matrix->_do_GET_json( "/rooms/$self->{room_id}/messages",
-      from  => "END",
-      dir   => "b",
-      limit => $limit,
-   )->then( sub {
-      my ( $response ) = @_;
-
-      foreach my $event ( reverse @{ $response->{chunk} } ) {
-         # These look like normal events
-         next unless my ( $subtype ) = ( $event->{type} =~ m/^m\.room\.(.*)$/ );
-         $subtype =~ s/\./_/g;
-
-         if( my $code = $self->can( "_handle_roomevent_${subtype}_forward" ) ) {
-            $code->( $self, $event );
-         }
-         else {
-            $matrix->log( "TODO: Handle room event $subtype" );
-         }
-      }
-
-      $self->maybe_invoke_event( on_synced_messages => );
-      Future->done( $self );
-   });
-}
-
 sub sync_members
 {
    my $self = shift;
@@ -172,8 +176,7 @@ sub sync_members
       my ( $response ) = @_;
 
       foreach my $event ( @{ $response->{chunk} } ) {
-         # These look like normal events
-         $self->_handle_roomevent_member_forward( $event );
+         $self->_handle_roomevent_member_initial( $event );
       }
 
       Future->done( $self );
@@ -250,14 +253,54 @@ sub send_message
       ->then_done()
 }
 
-sub _get_or_make_member
+=head2 $room->paginate_messages( limit => $n )->get
+
+Requests more messages of back-pagination history.
+
+There is no need to maintain a reference on the returned C<Future>; it will be
+adopted by the room object.
+
+=cut
+
+sub paginate_messages
 {
    my $self = shift;
-   my ( $user_id ) = @_;
+   my %args = @_;
 
-   my $user = $self->{matrix}->_get_or_make_user( $user_id );
+   my $limit = $args{limit} // 20;
+   my $from  = $self->{pagination_token} // "END";
 
-   return $self->{members_by_userid}{$user_id} ||= Member( $user, undef, undef );
+   my $matrix = $self->{matrix};
+
+   # Since we're now doing pagination, we'll need a second set of member
+   # objects
+   $self->{back_members_by_userid} //= {
+      pairmap { $a => Member( $b->user, $b->displayname, $b->membership ) } %{ $self->{members_by_userid} }
+   };
+
+   my $f = $matrix->_do_GET_json( "/rooms/$self->{room_id}/messages",
+      from  => $from,
+      dir   => "b",
+      limit => $limit,
+   )->then( sub {
+      my ( $response ) = @_;
+
+      foreach my $event ( @{ $response->{chunk} } ) {
+         next unless my ( $subtype ) = ( $event->{type} =~ m/^m\.room\.(.*)$/ );
+         $subtype =~ s/\./_/g;
+
+         if( my $code = $self->can( "_handle_roomevent_${subtype}_backward" ) ) {
+            $code->( $self, $event );
+         }
+         else {
+            $matrix->log( "TODO: Handle room pagination event $subtype" );
+         }
+      }
+
+      $self->{pagination_token} = $response->{end};
+      Future->done( $self );
+   });
+   $self->adopt_future( $f );
 }
 
 sub _handle_roomevent_create_forward
@@ -267,14 +310,78 @@ sub _handle_roomevent_create_forward
 
    # Nothing interesting here...
 }
+*_handle_roomevent_create_initial = \&_handle_roomevent_create_forward;
+
+sub _handle_state_forward
+{
+   my $self = shift;
+   my ( $field, $event ) = @_;
+
+   my $newvalue = $event->{content}{$field};
+
+   my $oldvalue = $self->{state}{$field};
+   $self->{state}{$field} = $newvalue;
+
+   $self->maybe_invoke_event( on_state_changed =>
+      $self->{members_by_userid}{$event->{user_id}}, $event,
+      $field => [ $oldvalue, $newvalue ]
+   );
+}
+
+sub _handle_state_backward
+{
+   my $self = shift;
+   my ( $field, $event ) = @_;
+
+   my $newvalue = $event->{content}{$field};
+   my $oldvalue = $event->{prev_content}{$field};
+
+   $self->maybe_invoke_event( on_back_state_changed =>
+      $self->{back_members_by_userid}{$event->{user_id}}, $event,
+      $field => [ $newvalue, $oldvalue ]
+   );
+}
+
+sub _handle_roomevent_name_initial
+{
+   my $self = shift;
+   my ( $event ) = @_;
+   $self->{state}{name} = $event->{content}{name};
+}
 
 sub _handle_roomevent_name_forward
 {
    my $self = shift;
    my ( $event ) = @_;
-   my $content = $event->{content};
+   $self->_handle_state_forward( name => $event );
+}
 
-   $self->{name} = $content->{name};
+sub _handle_roomevent_name_backward
+{
+   my $self = shift;
+   my ( $event ) = @_;
+   $self->_handle_state_backward( name => $event );
+}
+
+sub _handle_roomevent_topic_initial
+{
+   my $self = shift;
+   my ( $event ) = @_;
+   $self->{state}{topic} = $event->{content}{topic};
+}
+
+sub _handle_roomevent_topic_forward
+{
+   my $self = shift;
+   my ( $event ) = @_;
+   $self->_handle_state_forward( topic => $event );
+}
+
+sub _handle_roomevent_topic_backward
+{
+   my $self = shift;
+   my ( $event ) = @_;
+   $self->_handle_state_backward( topic => $event );
 }
 
 sub _handle_roomevent_config_forward
@@ -286,6 +393,7 @@ sub _handle_roomevent_config_forward
    defined $content->{$_} and $self->{$_} = $content->{$_}
       for qw( visibility room_alias_name );
 }
+*_handle_roomevent_config_initial = \&_handle_roomevent_config_forward;
 
 sub _handle_roomevent_message_forward
 {
@@ -293,17 +401,25 @@ sub _handle_roomevent_message_forward
    my ( $event ) = @_;
 
    my $user_id = $event->{user_id};
-   my $member = $self->{members_by_userid}{$user_id}; # caution: might be undef
+   my $member = $self->{members_by_userid}{$user_id} or
+      warn "TODO: Unknown member '$user_id' for forward message" and return;
 
-   # If we don't have a member yet, create a temporary one just to get the
-   #   user_id out of
-   $member ||= Member( $user_id, undef, undef );
-
-   $self->maybe_invoke_event( on_message =>
-      $member, $event->{content} );
+   $self->maybe_invoke_event( on_message => $member, $event->{content} );
 }
 
-sub _handle_roomevent_member_forward
+sub _handle_roomevent_message_backward
+{
+   my $self = shift;
+   my ( $event ) = @_;
+
+   my $user_id = $event->{user_id};
+   my $member = $self->{back_members_by_userid}{$user_id} or
+      warn "TODO: Unknown member '$user_id' for backward message" and return;
+
+   $self->maybe_invoke_event( on_back_message => $member, $event->{content} );
+}
+
+sub _handle_roomevent_member_initial
 {
    my $self = shift;
    my ( $event ) = @_;
@@ -311,24 +427,78 @@ sub _handle_roomevent_member_forward
    my $user_id = $event->{state_key}; # == user the change applies to
    my $content = $event->{content};
 
-   my $member = $self->_get_or_make_member( $user_id );
+   warn "ARGH: Room '$self->{room_id}' already has a member '$user_id'\n" and return
+      if $self->{members_by_userid}{$user_id};
+
+   my $user = $self->{matrix}->_get_or_make_user( $user_id );
+
+   $self->{members_by_userid}{$user_id} = Member(
+      $user, $content->{displayname}, $content->{membership} );
+}
+
+sub _handle_roomevent_member_forward
+{
+   my $self = shift;
+   my ( $event ) = @_;
+
+   $self->_handle_roomevent_member( on_membership => $event,
+      $self->{members_by_userid}, $event->{prev_content}, $event->{content} );
+
+   my $matrix = $self->{matrix};
+   if( $event->{content}{membership} eq "leave" and $event->{state_key} eq $matrix->{user_id} ) {
+      $matrix->_on_self_leave( $self );
+   }
+}
+
+sub _handle_roomevent_member_backward
+{
+   my $self = shift;
+   my ( $event ) = @_;
+
+   $self->_handle_roomevent_member( on_back_membership => $event,
+      $self->{back_members_by_userid}, $event->{content}, $event->{prev_content} );
+}
+
+sub _handle_roomevent_member
+{
+   my $self = shift;
+   my ( $name, $event, $members, $old, $new ) = @_;
+
+   # Currently, the server "deletes" users from the membership by setting
+   # membership to "leave". It's neater if we consider an empty content in
+   # that case.
+   $_ and $_->{membership} and $_->{membership} eq "leave" and undef $_
+      for $old, $new;
+
+   $_ and not keys %$_ and undef $_
+      for $old, $new;
+
+   my $user_id = $event->{state_key}; # == user the change applies to
+
+   my $member;
+   if( $old ) {
+      $member = $members->{$user_id} or
+         warn "ARGH: roomevent_member with unknown user id '$user_id'" and return;
+   }
+   else {
+      my $user = $self->{matrix}->_get_or_make_user( $user_id );
+      $member = $members->{$user_id} ||=
+         Member( $user, undef, undef );
+   }
 
    my %changes;
    foreach (qw( membership displayname )) {
-      next unless defined $content->{$_};
-      next if defined $member->$_ and $content->{$_} eq $member->$_;
+      next if !defined $old->{$_} and !defined $new->{$_};
+      next if defined $old->{$_} and defined $new->{$_} and $old->{$_} eq $new->{$_};
 
-      $changes{$_} = [ $member->$_, $content->{$_} ];
-      $member->$_ = $content->{$_};
+      $changes{$_} = [ $old->{$_}, $new->{$_} ];
+      $member->$_ = $new->{$_};
    }
 
-   $self->maybe_invoke_event( on_membership => $member, %changes );
+   $self->maybe_invoke_event( $name => $event, $member, %changes );
 
-   delete $self->{members_by_userid}{$user_id} if $content->{membership} eq "leave";
-
-   my $matrix = $self->{matrix};
-   if( $content->{membership} eq "leave" and $user_id eq $matrix->{user_id} ) {
-      $matrix->_on_self_leave( $self );
+   if( !$new ) {
+      delete $members->{$user_id};
    }
 }
 

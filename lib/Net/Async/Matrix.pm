@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 use Carp;
 
@@ -36,7 +36,21 @@ C<Net::Async::Matrix> - use Matrix with L<IO::Async>
 
 =head1 SYNOPSIS
 
- TODO
+ use Net::Async::Matrix;
+ use IO::Async::Loop;
+
+ my $loop = IO::Async::Loop->new;
+
+ my $matrix = Net::Async::Matrix->new(
+    server => "my.home.server",
+ );
+
+ $loop->add( $matrix );
+
+ $matrix->login(
+    user     => '@my-user:home.server',
+    password => 'SeKr1t',
+ )->get;
 
 =head1 DESCRIPTION
 
@@ -162,9 +176,8 @@ sub configure
    my $self = shift;
    my %params = @_;
 
-   foreach (qw( user_id access_token server path_prefix ua SSL
-                on_log on_presence on_room_new on_room_del
-                on_room_member on_room_message )) {
+   foreach (qw( server path_prefix ua SSL
+                on_log on_presence on_room_new on_room_del on_room_member on_room_message )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
 
@@ -275,6 +288,80 @@ sub _do_DELETE
    });
 }
 
+=head2 $matrix->login( %params )->get
+
+Performs the necessary steps required to authenticate with the configured
+Home Server, actually obtain an access token and starting the event stream.
+The returned C<Future> will eventually yield the C<$matrix> object itself, so
+it can be easily chained.
+
+There are various methods of logging in supported by Matrix; the following
+sets of arguments determine which is used:
+
+=over 4
+
+=item user_id, password
+
+Log in via the C<m.login.password> method.
+
+=item user_id, access_token
+
+Directly sets the C<user_id> and C<access_token> fields, bypassing the usual
+login semantics. This presumes you already have an existing access token to
+re-use, obtained by some other mechanism. This exists largely for testing
+purposes.
+
+=back
+
+=cut
+
+sub login
+{
+   my $self = shift;
+   my %params = @_;
+
+   if( defined $params{user_id} and defined $params{access_token} ) {
+      $self->{$_} = $params{$_} for qw( user_id access_token );
+      $self->start;
+      return Future->done( $self );
+   }
+
+   # Otherwise; try to obtain the login flow information
+   $self->_do_GET_json( "/login" )->then( sub {
+      my ( $response ) = @_;
+      my $flows = $response->{flows};
+
+      my @supported;
+      foreach my $flow ( @$flows ) {
+         next unless my ( $type ) = $flow->{type} =~ m/^m\.login\.(.*)$/;
+         push @supported, $type;
+
+         next unless my $code = $self->can( "_login_with_$type" );
+         next unless my $f = $code->( $self, %params );
+
+         return $f;
+      }
+
+      Future->fail( "Unsure how to log in (server supports @supported)", matrix => );
+   });
+}
+
+sub _login_with_password
+{
+   my $self = shift;
+   my %params = @_;
+
+   return unless defined $params{user_id} and defined $params{password};
+
+   $self->_do_POST_json( "/login",
+      { type => "m.login.password", user => $params{user_id}, password => $params{password} }
+   )->then( sub {
+      my ( $resp ) = @_;
+      return $self->login( %$resp ) if defined $resp->{access_token};
+      return Future->fail( "Expected server to respond with 'access_token'", matrix => );
+   });
+}
+
 =head2 $f = $matrix->start
 
 Performs the initial IMSync on the server, and starts the event stream to
@@ -294,15 +381,12 @@ sub start
 {
    my $self = shift;
 
-   return $self->{start_f} ||= do {
-      my $event_token;
+   defined $self->{access_token} or croak "Cannot ->start without an access token";
 
+   return $self->{start_f} ||= do {
       my $f = $self->_do_GET_json( "/initialSync", limit => 0 )
       ->then( sub {
          my ( $sync ) = @_;
-         $event_token = $sync->{end};
-
-         my @roomsync_f;
 
          foreach ( @{ $sync->{rooms} } ) {
             my $room_id = $_->{room_id};
@@ -312,11 +396,19 @@ sub start
                my $state = $_->{state};
 
                my $room = $self->_make_room( $room_id );
-               $self->_incoming_event( $_ ) for @$state;
+               foreach my $event ( @$state ) {
+                  $event->{type} =~ m/^m\.room\.(.*)$/ or next;
+                  my $method = "_handle_roomevent_".join("_", split m/\./, $1)."_initial";
+
+                  if( my $code = $room->can( $method ) ) {
+                     $code->( $room, $event );
+                  }
+                  else {
+                     warn "TODO: initial room event $event->{type}\n";
+                  }
+               }
 
                $room->maybe_invoke_event( on_synced_state => );
-
-               push @roomsync_f, $room->sync_messages( limit => 50 );
             }
             elsif( $membership eq "invite" ) {
                $self->log( "TODO: imsync returned a room invite" );
@@ -329,9 +421,7 @@ sub start
             $self->_incoming_event( $_ );
          }
 
-         Future->needs_all( @roomsync_f );
-      })->then( sub {
-         $self->start_longpoll( start => $event_token );
+         $self->start_longpoll( start => $sync->{end} );
          Future->done;
       });
       $self->adopt_future( $f );
@@ -697,7 +787,6 @@ sub join_room
       my ( $room_id ) = @_;
       my $room = $self->_get_or_make_room( $room_id );
       $room->initial_sync
-         ->then( sub { $room->sync_messages } );
    });
 }
 

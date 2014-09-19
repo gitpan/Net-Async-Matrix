@@ -1,5 +1,14 @@
 Revision history for Net-Async-Matrix
 
+0.06    2014/09/19 17:35:40
+        [CHANGES]
+         * New room event model to handle back-pagination as well as forward
+           events
+         * Support room names and topics
+         * Much improvement to 'client.pl' - nicer formatting, room topics,
+           put member joins/leaves/renames in the event log
+         * Support /login Matrix API with user_id + password
+
 0.05    2014/09/10 11:25:22
         [CHANGES]
          * Split room 'on_member' events into separate events for membership

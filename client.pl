@@ -11,9 +11,12 @@ use Net::Async::Matrix;
 
 use Tickit::Async;
 use Tickit::Console 0.07; # time/datestamp format
-use Tickit::Widgets qw( FloatBox Frame GridBox Static );
+use Tickit::Widgets qw( FloatBox Frame GridBox ScrollBox Static );
 Tickit::Widget::Frame->VERSION( '0.31' ); # bugfix to linetypes in constructor
 use String::Tagged 0.10; # ->append_tagged chainable
+
+# Presence list scrolling requires Tickit 0.48 to actually work properly
+use Tickit 0.48;
 
 use Getopt::Long;
 
@@ -33,7 +36,7 @@ my $loop = IO::Async::Loop->new;
 
 my $console = Tickit::Console->new(
    timestamp_format => String::Tagged->new_tagged( "%H:%M ", fg => undef )
-      ->apply_tag( 0, 5, fg => "blue" ),
+      ->apply_tag( 0, 5, fg => "hi-blue" ),
    datestamp_format => String::Tagged->new_tagged( "-- day is now %Y/%m/%d --",
       fg => "grey" ),
 );
@@ -159,6 +162,7 @@ sub new_room
    my ( $room ) = @_;
 
    my $floatbox;
+   my $headline;
 
    # Until Tickit::Widget::Tabbed supports a 'tab_class' argument to add_tab,
    # we'll have to cheat
@@ -170,8 +174,18 @@ sub new_room
       make_widget => sub {
          my ( $scroller ) = @_;
 
+         my $vbox = Tickit::Widget::VBox->new;
+
+         $vbox->add( $headline = Tickit::Widget::Static->new(
+               text => "",
+               style => { bg => "blue" },
+            ),
+            expand => 0
+         );
+         $vbox->add( $scroller, expand => 1 );
+
          return $floatbox = Tickit::Widget::FloatBox->new(
-            base_child  => $scroller,
+            base_child  => $vbox,
          );
       },
       on_line => sub {
@@ -189,16 +203,15 @@ sub new_room
    $roomtab->_setup(
       room     => $room,
       floatbox => $floatbox,
+      headline => $headline,
    );
 }
 
 if( defined $config->{user_id} ) {
-   $matrix->configure(
-      user_id      => $config->{user_id},
-      access_token => $config->{access_token},
-   );
-
-   $matrix->start;
+   print STDERR "Logging in as $config->{user_id}...\n";
+   $matrix->login(
+      map { $_ => $config->{$_} } qw( user_id password access_token )
+   )->get;
 }
 
 $SIG{__WARN__} = sub {
@@ -387,8 +400,10 @@ package RoomTab {
       my $self = shift;
       my %args = @_;
 
-      my $room     = $args{room};
+      my $room     = $self->{room} = $args{room};
       my $floatbox = $args{floatbox};
+
+      $self->{headline} = $args{headline};
 
       $self->{presence_table} = my $presence_table = Tickit::Widget::GridBox->new(
          col_spacing => 1,
@@ -406,7 +421,11 @@ package RoomTab {
 
                frame_fg => "white", frame_bg => "purple",
             },
-            child => $presence_table,
+            child => Tickit::Widget::ScrollBox->new(
+               child => $presence_table,
+               vertical   => "on_demand",
+               horizontal => 0,
+            ),
          ),
 
          top => 0, bottom => -1, right => -1,
@@ -425,33 +444,111 @@ package RoomTab {
       $room->configure(
          on_synced_state => sub {
             $self->set_name( $room->name );
+            $self->update_headline;
+
+            # Fetch initial presence state of users
+            foreach my $member ( $room->members ) {
+               $self->update_member_presence( $member ) if $member->membership eq "join";
+            }
+
+            $room->paginate_messages( limit => 150 );
          },
 
          on_message => sub {
             my ( undef, $member, $content ) = @_;
 
-            $self->append_line( build_message( $content, $member ),
+            $self->append_line( format_message( $content, $member ),
                indent => 10,
                time   => $content->{hsob_ts} / 1000,
             );
          },
-         on_membership => sub {
-            my ( undef, $member, %changes ) = @_;
+         on_back_message => sub {
+            my ( undef, $member, $content ) = @_;
 
-            # Ignore invited users
-            return if $member->membership eq "invite";
+            $self->prepend_line( format_message( $content, $member ),
+               indent => 10,
+               time   => $content->{hsob_ts} / 1000,
+            );
+         },
+
+         on_membership => sub {
+            my ( undef, $event, $member, %changes ) = @_;
 
             $self->update_member_presence( $member );
 
-            # TODO - display this as a join/leave event in the message history.
-            # However, it's currently hard to do that during historic backfill at
-            # initialSync time. :(
+            if( $changes{membership} and ( $changes{membership}[1] // "" ) ne "invite" ) {
+               # On a LEAVE event they no longer have a displayname
+               $member->displayname = $changes{displayname}[0] if !defined $changes{membership}[1];
+
+               $self->append_line( format_membership( $changes{membership}[1] // "leave", $member ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            elsif( $changes{displayname} ) {
+               $self->append_line( format_displayname_change( $member, @{ $changes{displayname} } ) );
+            }
          },
+         on_back_membership => sub {
+            my ( undef, $event, $member, %changes ) = @_;
+
+            if( $changes{membership} and ( $changes{membership}[0] // "" ) ne "invite" ) {
+               # On a JOIN event they don't yet have a displayname
+               $member->displayname = $changes{displayname}[0] if $changes{membership}[0] // '' eq "join";
+
+               $self->prepend_line( format_membership( $changes{membership}[0] // "leave", $member ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            elsif( $changes{displayname} ) {
+               $self->prepend_line( format_displayname_change( $member, reverse @{ $changes{displayname} } ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+         },
+
+         on_state_changed => sub {
+            my ( undef, $member, $event, %changes ) = @_;
+
+            if( $changes{name} ) {
+               $self->append_line( format_name_change( $member, $changes{name}[1] ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            if( $changes{topic} ) {
+               $self->append_line( format_topic_change( $member, $changes{topic}[1] ),
+                  time => $event->{ts} / 1000,
+               );
+               $self->update_headline;
+            }
+         },
+         on_back_state_changed => sub {
+            my ( undef, $member, $event, %changes ) = @_;
+
+            if( $changes{name} ) {
+               $self->prepend_line( format_name_change( $member, $changes{name}[0] ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            if( $changes{topic} ) {
+               $self->prepend_line( format_topic_change( $member, $changes{topic}[0] ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+         },
+
          on_presence => sub {
             my ( undef, $member, %changes ) = @_;
             $self->update_member_presence( $member );
          },
       );
+   }
+
+   sub update_headline
+   {
+      my $self = shift;
+      my $room = $self->{room};
+
+      $self->{headline}->set_text( $room->topic // "" );
    }
 
    sub update_member_presence
@@ -471,7 +568,7 @@ package RoomTab {
 
       my $presence_table = $self->{presence_table};
 
-      if( defined $rowidx and $member->membership eq "leave" ) {
+      if( defined $rowidx and !defined $member->membership ) {
          splice @$presence_userids, $rowidx, 1, ();
          $presence_table->delete_row( $rowidx+1 );
          return;
@@ -491,9 +588,10 @@ package RoomTab {
 
       $name->set_style( fg => $PRESENCE_STATE_TO_COLOUR{$user->presence} )
          if defined $user->presence;
-      $name->set_text(
-         defined $member->displayname ? $member->displayname : "[".$user->user_id."]"
-      );
+
+      my $dname = defined $member->displayname ? $member->displayname : "[".$user->user_id."]";
+      $dname = substr( $dname, 0, 17 ) . "..." if length $dname > 20;
+      $name->set_text( $dname );
 
       if( defined $user->last_active ) {
          $since->set_text( strftime "%Y/%m/%d %H:%M", localtime $user->last_active );
@@ -503,7 +601,7 @@ package RoomTab {
       }
    }
 
-   sub build_message
+   sub format_message
    {
       my ( $content, $member ) = @_;
 
@@ -514,15 +612,15 @@ package RoomTab {
 
       if( $msgtype eq "m.text" ) {
          return $s
-            ->append_tagged( "<", fg => "purple" )
-            ->append( build_message_displayname( $member ) )
-            ->append_tagged( "> ", fg => "purple" )
+            ->append_tagged( "<", fg => "magenta" )
+            ->append( format_displayname( $member ) )
+            ->append_tagged( "> ", fg => "magenta" )
             ->append       ( $body );
       }
       elsif( $msgtype eq "m.emote" ) {
          return $s
-            ->append_tagged( "* ", fg => "purple" )
-            ->append( build_message_displayname( $member ) )
+            ->append_tagged( "* ", fg => "magenta" )
+            ->append( format_displayname( $member ) )
             ->append_tagged( " " )
             ->append       ( $body );
       }
@@ -531,19 +629,94 @@ package RoomTab {
             ->append_tagged( "[" )
             ->append_tagged( $msgtype, fg => "yellow" )
             ->append_tagged( " from " )
-            ->append( build_message_displayname( $member ) )
+            ->append( format_displayname( $member ) )
             ->append_tagged( "]: " )
             ->append       ( Data::Dump::pp $body );
       }
    }
 
-   sub build_message_displayname
+   sub format_membership
    {
-      my ( $member ) = @_;
+      my ( $membership, $member ) = @_;
+
+      my $s = String::Tagged->new;
+
+      if( $membership eq "join" ) {
+         return $s
+            ->append_tagged( " => ", fg => "magenta" )
+            ->append       ( format_displayname( $member, 1 ) )
+            ->append       ( " " )
+            ->append_tagged( "joined", fg => "green" );
+      }
+      elsif( $membership eq "leave" ) {
+         return $s
+            ->append_tagged( " <= ", fg => "magenta" )
+            ->append       ( format_displayname( $member, 1 ) )
+            ->append       ( " " )
+            ->append_tagged( "left", fg => "red" );
+      }
+      else {
+         return $s
+            ->append       ( " [membership " )
+            ->append_tagged( $membership, fg => "yellow" )
+            ->append       ( "] " )
+            ->append       ( format_displayname( $member, 1 ) );
+      }
+   }
+
+   sub format_displayname_change
+   {
+      my ( $member, $oldname, $newname ) = @_;
+
+      my $s = String::Tagged->new
+         ->append_tagged( "  ** ", fg => "magenta" );
+
+      defined $oldname ?
+         $s->append_tagged( $oldname, fg => "cyan" ) :
+         $s->append_tagged( "[".$member->user->user_id."]", fg => "grey" );
+
+      $s->append_tagged( " is now called " );
+
+      defined $newname ?
+         $s->append_tagged( $newname, fg => "cyan" ) :
+         $s->append_tagged( "[".$member->user->user_id."]", fg => "grey" );
+
+      return $s;
+   }
+
+   sub format_name_change
+   {
+      my ( $member, $name ) = @_;
+
+      return String::Tagged->new
+         ->append       ( " ** " )
+         ->append       ( format_displayname( $member ) )
+         ->append       ( " sets the room name to: " )
+         ->append_tagged( $name, fg => "cyan" );
+   }
+
+   sub format_topic_change
+   {
+      my ( $member, $topic ) = @_;
+
+      return String::Tagged->new
+         ->append       ( " ** " )
+         ->append       ( format_displayname( $member ) )
+         ->append       ( " sets the topic to: " )
+         ->append_tagged( $topic, fg => "cyan" );
+   }
+
+   sub format_displayname
+   {
+      my ( $member, $full ) = @_;
 
       if( defined $member->displayname ) {
-         return String::Tagged->new
+         my $s = String::Tagged->new
             ->append_tagged( $member->displayname, fg => "cyan" );
+
+         $s->append_tagged( " [".$member->user->user_id."]", fg => "grey" ) if $full;
+
+         return $s;
       }
       else {
          return String::Tagged->new
