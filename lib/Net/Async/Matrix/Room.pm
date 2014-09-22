@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 use Carp;
 
@@ -51,9 +51,9 @@ state.
 Invoked on receipt of a new message from the given member, either "live" from
 the event stream, or from backward pagination.
 
-=head2 on_membership $member, $event, %changes
+=head2 on_membership $event, $member, $event, %changes
 
-=head2 on_back_membership $member, $event, %changes
+=head2 on_back_membership $event, $member, $event, %changes
 
 Invoked on receipt of a membership change event for the given member, either
 "live" from the event stream, or from backward pagination. C<%changes> will be
@@ -495,7 +495,7 @@ sub _handle_roomevent_member
       $member->$_ = $new->{$_};
    }
 
-   $self->maybe_invoke_event( $name => $event, $member, %changes );
+   $self->maybe_invoke_event( $name => $member, $event, %changes );
 
    if( !$new ) {
       delete $members->{$user_id};

@@ -1,5 +1,10 @@
 Revision history for Net-Async-Matrix
 
+0.07    2014/09/22 17:05:01
+        [CHANGES]
+         * Support /register Matrix API with user_id + password
+         * Fix on_membership event argument order to match on_state_change
+
 0.06    2014/09/19 17:35:40
         [CHANGES]
          * New room event model to handle back-pagination as well as forward

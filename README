@@ -56,12 +56,6 @@ PARAMETERS
     addition, `CODE' references for event handlers using the event names
     listed above can also be given.
 
-  user_id => STRING
-  access_token => STRING
-    Optional login details to use for logging in as an existing user if an
-    access token is already known. For registering a new user, see instead
-    the `register' method.
-
   server => STRING
     Hostname and port number to contact the homeserver at. Given in the form
 
@@ -106,6 +100,10 @@ METHODS
         access token to re-use, obtained by some other mechanism. This
         exists largely for testing purposes.
 
+  $matrix->register( %params )->get
+    Performs the necessary steps required to create a new account on the
+    configured Home Server.
+
   $f = $matrix->start
     Performs the initial IMSync on the server, and starts the event stream
     to begin receiving events.
@@ -130,11 +128,6 @@ METHODS
   $user = $matrix->user( $user_id )
     Returns the user object representing a user of the given ID, if defined,
     or `undef'.
-
-  ( $user_id, $access_token ) = $matrix->register( $localpart )->get
-    Sends a user account registration request to the Matrix homeserver to
-    create a new account. On successful completion, the returned user ID and
-    token are stored by the object itself and the event stream is started.
 
   $name = $matrix->get_displayname->get
   $matrix->set_displayname( $name )->get

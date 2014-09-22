@@ -472,7 +472,7 @@ package RoomTab {
          },
 
          on_membership => sub {
-            my ( undef, $event, $member, %changes ) = @_;
+            my ( undef, $member, $event, %changes ) = @_;
 
             $self->update_member_presence( $member );
 
@@ -489,7 +489,7 @@ package RoomTab {
             }
          },
          on_back_membership => sub {
-            my ( undef, $event, $member, %changes ) = @_;
+            my ( undef, $member, $event, %changes ) = @_;
 
             if( $changes{membership} and ( $changes{membership}[0] // "" ) ne "invite" ) {
                # On a JOIN event they don't yet have a displayname

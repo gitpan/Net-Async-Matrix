@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 use Carp;
 
@@ -99,14 +99,6 @@ Invoked when the user has now left a room.
 The following named parameters may be passed to C<new> or C<configure>. In
 addition, C<CODE> references for event handlers using the event names listed
 above can also be given.
-
-=head2 user_id => STRING
-
-=head2 access_token => STRING
-
-Optional login details to use for logging in as an existing user if an access
-token is already known. For registering a new user, see instead the
-C<register> method.
 
 =head2 server => STRING
 
@@ -362,6 +354,53 @@ sub _login_with_password
    });
 }
 
+=head2 $matrix->register( %params )->get
+
+Performs the necessary steps required to create a new account on the
+configured Home Server.
+
+=cut
+
+sub register
+{
+   my $self = shift;
+   my %params = @_;
+
+   $self->_do_GET_json( "/register" )->then( sub {
+      my ( $response ) = @_;
+      my $flows = $response->{flows};
+
+      my @supported;
+      foreach my $flow ( @$flows ) {
+         next unless my ( $type ) = $flow->{type} =~ m/^m\.login\.(.*)$/;
+         push @supported, $type;
+
+         next unless my $code = $self->can( "_register_with_$type" );
+         next unless my $f = $code->( $self, %params );
+
+         return $f;
+      }
+
+      Future->fail( "Unsure how to register (server supports @supported)", matrix => );
+   });
+}
+
+sub _register_with_password
+{
+   my $self = shift;
+   my %params = @_;
+
+   return unless defined $params{password};
+
+   $self->_do_POST_json( "/register",
+      { type => "m.login.password", user => $params{user_id}, password => $params{password} }
+   )->then( sub {
+      my ( $resp ) = @_;
+      return $self->login( %$resp ) if defined $resp->{access_token};
+      return Future->fail( "Expected server to respond with 'access_token'", matrix => );
+   });
+}
+
 =head2 $f = $matrix->start
 
 Performs the initial IMSync on the server, and starts the event stream to
@@ -595,33 +634,6 @@ sub _on_self_leave
    $self->maybe_invoke_event( on_room_del => $room );
 
    delete $self->{rooms_by_id}{$room->room_id};
-}
-
-=head2 ( $user_id, $access_token ) = $matrix->register( $localpart )->get
-
-Sends a user account registration request to the Matrix homeserver to create a
-new account. On successful completion, the returned user ID and token are
-stored by the object itself and the event stream is started.
-
-=cut
-
-sub register
-{
-   my $self = shift;
-   my ( $localpart ) = @_;
-
-   # TODO: Matrix calls this a "user_id" but it's the localpart that you want.
-   # SHOULD FIX
-   $self->_do_POST_json( "/register", { user_id => $localpart } )->then( sub {
-      my ( $content ) = @_;
-
-      $self->{user_id} = $content->{user_id};
-      $self->{access_token} = $content->{access_token};
-
-      $self->start;
-
-      Future->done( $content->{user_id}, $content->{access_token} );
-   });
 }
 
 =head2 $name = $matrix->get_displayname->get
