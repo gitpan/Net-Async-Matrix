@@ -11,7 +11,7 @@ use Net::Async::Matrix;
 
 use Tickit::Async;
 use Tickit::Console 0.07; # time/datestamp format
-use Tickit::Widgets qw( FloatBox Frame GridBox ScrollBox Static );
+use Tickit::Widgets qw( FloatBox Frame GridBox ScrollBox Static VBox );
 Tickit::Widget::Frame->VERSION( '0.31' ); # bugfix to linetypes in constructor
 use String::Tagged 0.10; # ->append_tagged chainable
 
@@ -191,7 +191,13 @@ sub new_room
       on_line => sub {
          my ( $tab, $line ) = @_;
          if( $line =~ s{^/}{} ) {
-            do_command( $line, $tab );
+            my ( $cmd, @args ) = split m/\s+/, $line;
+            if( my $code = $tab->can( "cmd_$cmd" ) ) {
+               $room->adopt_future( $tab->$code( @args ) );
+            }
+            else {
+               do_command( $line, $tab );
+            }
          }
          else {
             $room->adopt_future( $room->send_message( $line ) );
@@ -271,21 +277,41 @@ sub do_command
 sub cmd_register
 {
    shift;
-   my ( $localpart ) = @_;
+   my ( $localpart, @args ) = @_;
 
-   $matrix->register( $localpart )->then( sub {
-      my ( $user_id, $access_token ) = @_;
+   my %args = ( user_id => $localpart );
+   while( @args ) {
+      for( shift @args ) {
+         m/^--(.*)$/ and
+            $args{$1} = shift @args, last;
 
-      ::log( "Received new user_id $user_id" );
+         $args{password} = $_;
+      }
+   }
 
-      my $config;
-      $config = YAML::LoadFile( $CONFIG ) if -f $CONFIG;
-      $config->{user_id} = $user_id;
-      $config->{access_token} = $access_token;
-      $config->{server} //= $SERVER;
+   $matrix->register( %args )->then( sub {
+      ::log( "Registered" );
+      Future->done;
+   });
+}
 
-      YAML::DumpFile( $CONFIG, $config );
+sub cmd_login
+{
+   shift;
+   my ( $user_id, @args ) = @_;
 
+   my %args = ( user_id => $user_id );
+   while( @args ) {
+      for( shift @args ) {
+         m/^--(.*)$/ and
+            $args{$1} = shift @args, last;
+
+         $args{password} = $_;
+      }
+   }
+
+   $matrix->login( %args )->then( sub {
+      ::log( "Logged in" );
       Future->done;
    });
 }
@@ -421,11 +447,7 @@ package RoomTab {
 
                frame_fg => "white", frame_bg => "purple",
             },
-            child => Tickit::Widget::ScrollBox->new(
-               child => $presence_table,
-               vertical   => "on_demand",
-               horizontal => 0,
-            ),
+            child => my $vbox = Tickit::Widget::VBox->new,
          ),
 
          top => 0, bottom => -1, right => -1,
@@ -433,6 +455,19 @@ package RoomTab {
 
          # Initially hidden
          hidden => 1,
+      );
+
+      $vbox->add(
+         Tickit::Widget::ScrollBox->new(
+            child => $presence_table,
+            vertical   => "on_demand",
+            horizontal => 0,
+         ),
+         expand => 1,
+      );
+
+      $vbox->add(
+         my $presence_summary = Tickit::Widget::Static->new( text => "" )
       );
 
       my $visible = 0;
@@ -447,9 +482,13 @@ package RoomTab {
             $self->update_headline;
 
             # Fetch initial presence state of users
-            foreach my $member ( $room->members ) {
-               $self->update_member_presence( $member ) if $member->membership eq "join";
+            foreach my $member ( $room->joined_members ) {
+               $self->update_member_presence( $member );
             }
+
+            $presence_summary->set_text(
+               sprintf "Total: %d users", scalar $room->joined_members
+            );
 
             $room->paginate_messages( limit => 150 );
          },
@@ -487,6 +526,10 @@ package RoomTab {
             elsif( $changes{displayname} ) {
                $self->append_line( format_displayname_change( $member, @{ $changes{displayname} } ) );
             }
+
+            $presence_summary->set_text(
+               sprintf "Total: %d users", scalar $room->joined_members
+            );
          },
          on_back_membership => sub {
             my ( undef, $member, $event, %changes ) = @_;
@@ -722,5 +765,24 @@ package RoomTab {
          return String::Tagged->new
             ->append_tagged ( $member->user->user_id, fg => "grey" );
       }
+   }
+
+   sub cmd_me
+   {
+      my $self = shift;
+      my ( @args ) = @_;
+
+      my $text = join " ", @args;
+      my $room = $self->{room};
+
+      $room->send_message( type => "m.emote", body => $text );
+   }
+
+   sub cmd_leave
+   {
+      my $self = shift;
+
+      my $room = $self->{room};
+      $room->leave;
    }
 }

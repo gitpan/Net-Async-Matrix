@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 use Carp;
 
@@ -29,6 +29,8 @@ use Net::Async::Matrix::Room;
 
 use constant PATH_PREFIX => "/_matrix/client/api/v1";
 use constant LONGPOLL_SECONDS => 30;
+
+use constant HAVE_DIGEST_HMAC_SHA1 => eval { require Digest::HMAC_SHA1; };
 
 =head1 NAME
 
@@ -265,21 +267,6 @@ sub _do_send_json
 sub _do_PUT_json  { shift->_do_send_json( PUT  => @_ ) }
 sub _do_POST_json { shift->_do_send_json( POST => @_ ) }
 
-sub _do_DELETE
-{
-   my $self = shift;
-   my ( $path ) = @_;
-
-   $self->{ua}->do_request(
-      method => "DELETE",
-      uri    => $self->_uri_for_path( $path )
-   )->then( sub {
-      my ( $response ) = @_;
-
-      Future->done;
-   });
-}
-
 =head2 $matrix->login( %params )->get
 
 Performs the necessary steps required to authenticate with the configured
@@ -371,14 +358,32 @@ sub register
       my $flows = $response->{flows};
 
       my @supported;
-      foreach my $flow ( @$flows ) {
-         next unless my ( $type ) = $flow->{type} =~ m/^m\.login\.(.*)$/;
-         push @supported, $type;
+      # Try to find a flow for which we can support all the stages
+      FLOW: foreach my $flow ( @$flows ) {
+         push @supported, join ",", @{ $flow->{stages} };
 
-         next unless my $code = $self->can( "_register_with_$type" );
-         next unless my $f = $code->( $self, %params );
+         my @flowcode;
+         foreach my $stage ( @{ $flow->{stages} } ) {
+            next FLOW unless my ( $type ) = $stage =~ m/^m\.login\.(.*)$/;
+            $type =~ s/\./_/g;
 
-         return $f;
+            next FLOW unless my $method = $self->can( "_register_with_$type" );
+            next FLOW unless my $code = $method->( $self, %params );
+
+            push @flowcode, $code;
+         }
+
+         # If we've got this far then we know we can implement all the stages
+         my $start = Future->new;
+         my $tail = $start;
+         $tail = $tail->then( $_ ) for @flowcode;
+
+         $start->done();
+         return $tail->then( sub {
+            my ( $resp ) = @_;
+            return $self->login( %$resp ) if defined $resp->{access_token};
+            return Future->fail( "Expected server to respond with 'access_token'", matrix => );
+         });
       }
 
       Future->fail( "Unsure how to register (server supports @supported)", matrix => );
@@ -390,15 +395,43 @@ sub _register_with_password
    my $self = shift;
    my %params = @_;
 
-   return unless defined $params{password};
+   return unless defined( my $password = $params{password} );
 
-   $self->_do_POST_json( "/register",
-      { type => "m.login.password", user => $params{user_id}, password => $params{password} }
-   )->then( sub {
+   return sub {
       my ( $resp ) = @_;
-      return $self->login( %$resp ) if defined $resp->{access_token};
-      return Future->fail( "Expected server to respond with 'access_token'", matrix => );
-   });
+
+      $self->_do_POST_json( "/register", {
+         type    => "m.login.password",
+         session => $resp->{session},
+
+         user     => $params{user_id},
+         password => $password,
+      } );
+   }
+}
+
+sub _register_with_recaptcha
+{
+   my $self = shift;
+   my %params = @_;
+
+   return unless HAVE_DIGEST_HMAC_SHA1 and
+      defined( my $secret = $params{captcha_bypass_secret} ) and
+      defined $params{user_id};
+
+   my $digest = Digest::HMAC_SHA1::hmac_sha1_hex( $params{user_id}, $secret );
+
+   return sub {
+      my ( $resp ) = @_;
+
+      $self->_do_POST_json( "/register", {
+         type    => "m.login.recaptcha",
+         session => $resp->{session},
+
+         user                => $params{user_id},
+         captcha_bypass_hmac => $digest,
+      } );
+   };
 }
 
 =head2 $f = $matrix->start
@@ -773,6 +806,8 @@ sub create_room
 =head2 $matrix->join_room( $room_alias_or_id )->get
 
 Requests to join an existing room with the given alias name or plain room ID.
+If this room is already known by the C<$matrix> object, this method simply
+returns it.
 
 =cut
 
@@ -797,17 +832,14 @@ sub join_room
 
    $f->then( sub {
       my ( $room_id ) = @_;
-      my $room = $self->_get_or_make_room( $room_id );
-      $room->initial_sync
+      if( my $room = $self->{rooms_by_id}{$room_id} ) {
+         return Future->done( $room );
+      }
+      else {
+         my $room = $self->_make_room( $room_id );
+         $room->initial_sync
+      }
    });
-}
-
-sub leave_room
-{
-   my $self = shift;
-   my ( $roomid ) = @_;
-
-   $self->_do_DELETE( "/rooms/$roomid/state/m.room.member/$self->{user_id}" );
 }
 
 sub room_list

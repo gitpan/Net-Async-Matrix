@@ -147,7 +147,8 @@ METHODS
 
   $matrix->join_room( $room_alias_or_id )->get
     Requests to join an existing room with the given alias name or plain
-    room ID.
+    room ID. If this room is already known by the `$matrix' object, this
+    method simply returns it.
 
 USER STRUCTURES
     Parameters documented as `$user' receive a user struct, which supports

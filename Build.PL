@@ -15,6 +15,9 @@ my $build = Module::Build->new(
       'POSIX' => 0,
       'Struct::Dumb' => 0,
    },
+   recommends => {
+      'Digest::HMAC_MD5' => 0,
+   },
    build_requires => {
       'Test::More' => '0.88', # done_testing
    },

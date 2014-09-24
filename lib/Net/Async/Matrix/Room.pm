@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 use Carp;
 
@@ -186,7 +186,8 @@ sub sync_members
 =head2 @members = $room->members
 
 Returns a list of member structs containing the currently known members of the
-room, in no particular order.
+room, in no particular order. This list will include users who are not yet
+members of the room, but simply have been invited.
 
 =cut
 
@@ -194,6 +195,35 @@ sub members
 {
    my $self = shift;
    return values %{ $self->{members_by_userid} };
+}
+
+=head2 @members = $room->joined_members
+
+Returns the subset of C<all_members> who actually in the C<"join"> state -
+i.e. are not invitees, or have left.
+
+=cut
+
+sub joined_members
+{
+   my $self = shift;
+   return grep { $_->membership eq "join" } $self->members;
+}
+
+=head2 $room->leave->get
+
+Requests to leave the room. After this completes, the user will no longer be
+a member of the room.
+
+=cut
+
+sub leave
+{
+   my $self = shift;
+
+   my $matrix = $self->{matrix};
+
+   $matrix->_do_POST_json( "/rooms/$self->{room_id}/leave", {} );
 }
 
 =head2 $room->send_message( %args )->get
