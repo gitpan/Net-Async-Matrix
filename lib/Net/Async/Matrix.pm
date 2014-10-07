@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 use Carp;
 
@@ -30,6 +30,7 @@ use Net::Async::Matrix::Room;
 use constant PATH_PREFIX => "/_matrix/client/api/v1";
 use constant LONGPOLL_SECONDS => 30;
 
+# This is only needed for the (undocumented) recaptcha bypass feature
 use constant HAVE_DIGEST_HMAC_SHA1 => eval { require Digest::HMAC_SHA1; };
 
 =head1 NAME
@@ -93,6 +94,11 @@ Passed an instance of L<Net::Async::Matrix::Room>.
 =head2 on_room_del $room
 
 Invoked when the user has now left a room.
+
+=head2 on_invite $event
+
+Invoked on receipt of a room invite. The C<$event> will contain the plain
+Matrix event as received; with at least the keys C<inviter> and C<room_id>.
 
 =cut
 
@@ -171,7 +177,8 @@ sub configure
    my %params = @_;
 
    foreach (qw( server path_prefix ua SSL
-                on_log on_presence on_room_new on_room_del on_room_member on_room_message )) {
+                on_log on_presence on_room_new on_room_del on_invite
+                on_room_member on_room_message )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
 
@@ -266,6 +273,18 @@ sub _do_send_json
 
 sub _do_PUT_json  { shift->_do_send_json( PUT  => @_ ) }
 sub _do_POST_json { shift->_do_send_json( POST => @_ ) }
+
+sub _do_DELETE
+{
+   my $self = shift;
+   my ( $path, %params ) = @_;
+
+   $self->{ua}->do_request(
+      method => "DELETE",
+      uri    => $self->_uri_for_path( $path, %params ),
+      $self->{SSL} ? %{ $self->{SSL_args} } : (),
+   );
+}
 
 =head2 $matrix->login( %params )->get
 
@@ -415,9 +434,11 @@ sub _register_with_recaptcha
    my $self = shift;
    my %params = @_;
 
-   return unless HAVE_DIGEST_HMAC_SHA1 and
-      defined( my $secret = $params{captcha_bypass_secret} ) and
+   return unless defined( my $secret = $params{captcha_bypass_secret} ) and
       defined $params{user_id};
+
+   warn "Cannot use captcha_bypass_secret to bypass m.register.recaptcha without Digest::HMAC_SHA1\n" and return
+      if !HAVE_DIGEST_HMAC_SHA1;
 
    my $digest = Digest::HMAC_SHA1::hmac_sha1_hex( $params{user_id}, $secret );
 
@@ -468,24 +489,16 @@ sub start
                my $state = $_->{state};
 
                my $room = $self->_make_room( $room_id );
-               foreach my $event ( @$state ) {
-                  $event->{type} =~ m/^m\.room\.(.*)$/ or next;
-                  my $method = "_handle_roomevent_".join("_", split m/\./, $1)."_initial";
-
-                  if( my $code = $room->can( $method ) ) {
-                     $code->( $room, $event );
-                  }
-                  else {
-                     warn "TODO: initial room event $event->{type}\n";
-                  }
-               }
+               $room->_handle_event_initial( $_ ) for @$state;
 
                $room->maybe_invoke_event( on_synced_state => );
             }
             elsif( $membership eq "invite" ) {
-               $self->log( "TODO: imsync returned a room invite" );
+               $self->maybe_invoke_event( on_invite => $_ );
             }
-            # Else: TODO something else?
+            else {
+               $self->log( "TODO: imsync returned a room in membership state $membership" );
+            }
          }
 
          # Now push use presence messages
@@ -516,16 +529,6 @@ sub stop
 }
 
 ## Longpoll events
-
-sub get_current_event_token
-{
-   my $self = shift;
-
-   $self->_do_GET_json( "/events", from => "END", timeout => 0 )->then( sub {
-      my ( $response ) = @_;
-      Future->done( $response->{end} );
-   });
-}
 
 sub start_longpoll
 {
@@ -796,10 +799,8 @@ sub create_room
       my ( $content ) = @_;
 
       my $room = $self->_get_or_make_room( $content->{room_id} );
-      # TODO this isn't synced yet but the server won't tell us when it is :(
-      $room->maybe_invoke_event( on_synced_state => );
-      $room->maybe_invoke_event( on_synced_messages => );
-      Future->done( $room, $content->{room_alias} );
+      $room->initial_sync
+         ->then_done( $room, $content->{room_alias} );
    });
 }
 
@@ -851,6 +852,39 @@ sub room_list
          my ( $response ) = @_;
          Future->done( pp($response) );
       });
+}
+
+=head2 $matrix->add_alias( $alias, $room_id )->get
+
+=head2 $matrix->delete_alias( $alias )->get
+
+Performs a directory server request to create the given room alias name, to
+point at the room ID, or to remove it again.
+
+Note that this is likely only to be supported for alias names scoped within
+the homeserver the client is connected to, and that additionally some form of
+permissions system may be in effect on the server to limit access to the
+directory server.
+
+=cut
+
+sub add_alias
+{
+   my $self = shift;
+   my ( $alias, $room_id ) = @_;
+
+   $self->_do_PUT_json( "/directory/room/$alias",
+      { room_id => $room_id },
+   )->then_done();
+}
+
+sub delete_alias
+{
+   my $self = shift;
+   my ( $alias ) = @_;
+
+   $self->_do_DELETE( "/directory/room/$alias" )
+      ->then_done();
 }
 
 ## Incoming events
@@ -936,6 +970,9 @@ sub _handle_roomevent_member_forward
          # TODO: "members" isn't enough. We want other config too...
          $room->initial_sync
       );
+   }
+   elsif( $membership eq "invite" ) {
+      $self->maybe_invoke_event( on_invite => $event );
    }
    else {
       $self->log( "Unhandled selfroom event member membership=$membership" );

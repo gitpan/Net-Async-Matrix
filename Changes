@@ -1,5 +1,21 @@
 Revision history for Net-Async-Matrix
 
+0.09    2014/10/07 18:05:58
+        [CHANGES]
+         * Many more events are handled and reported via on_state:
+            + m.room.aliases
+            + m.room.join_rules
+            + m.room.*_level
+         * Added ability to send invites and an event for incoming invites
+         * Room membership change events now also include the member making
+           the change as well as the member the change is about
+         * Allow setting room names and topics, adding and removing aliases,
+           and changing member and room power levels
+
+        [BUGFIXES]
+         * Fetch full room initial state on join or create before invoking
+           on_state_synced event
+
 0.08    2014/09/24 17:09:50
         [CHANGES]
          * Added $room->joined_members, to allow filtering of other states

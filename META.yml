@@ -5,7 +5,7 @@ author:
 build_requires:
   Test::More: '0.88'
 dynamic_config: 1
-generated_by: 'Module::Build version 0.4206, CPAN::Meta::Converter version 2.142060'
+generated_by: 'Module::Build version 0.421, CPAN::Meta::Converter version 2.142060'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -14,10 +14,10 @@ name: Net-Async-Matrix
 provides:
   Net::Async::Matrix:
     file: lib/Net/Async/Matrix.pm
-    version: '0.08'
+    version: '0.09'
   Net::Async::Matrix::Room:
     file: lib/Net/Async/Matrix/Room.pm
-    version: '0.08'
+    version: '0.09'
 recommends:
   Digest::HMAC_MD5: '0'
 requires:
@@ -30,5 +30,6 @@ requires:
   POSIX: '0'
   Struct::Dumb: '0'
 resources:
+  IRC: irc://irc.perl.org/#io-async
   license: http://dev.perl.org/licenses/
-version: '0.08'
+version: '0.09'

@@ -51,6 +51,11 @@ EVENTS
   on_room_del $room
     Invoked when the user has now left a room.
 
+  on_invite $event
+    Invoked on receipt of a room invite. The `$event' will contain the plain
+    Matrix event as received; with at least the keys `inviter' and
+    `room_id'.
+
 PARAMETERS
     The following named parameters may be passed to `new' or `configure'. In
     addition, `CODE' references for event handlers using the event names
@@ -149,6 +154,16 @@ METHODS
     Requests to join an existing room with the given alias name or plain
     room ID. If this room is already known by the `$matrix' object, this
     method simply returns it.
+
+  $matrix->add_alias( $alias, $room_id )->get
+  $matrix->delete_alias( $alias )->get
+    Performs a directory server request to create the given room alias name,
+    to point at the room ID, or to remove it again.
+
+    Note that this is likely only to be supported for alias names scoped
+    within the homeserver the client is connected to, and that additionally
+    some form of permissions system may be in effect on the server to limit
+    access to the directory server.
 
 USER STRUCTURES
     Parameters documented as `$user' receive a user struct, which supports

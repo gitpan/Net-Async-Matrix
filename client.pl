@@ -155,6 +155,20 @@ $loop->add( $matrix = Net::Async::Matrix->new(
          append_line_colour( red => "  ".$response->content );
       }
    },
+
+   on_invite => sub {
+      my ( $self, $event ) = @_;
+
+      $globaltab->append_line( String::Tagged->new
+         ->append_tagged( " ** " )
+         ->append_tagged( $event->{inviter}, fg => "grey" )
+         ->append_tagged( " invites you to " )
+         ->append_tagged( $event->{room_id}, fg => "cyan" )
+      );
+
+      # TODO: consider whether we should look up user displayname, room name,
+      # etc...
+   },
 ));
 
 sub new_room
@@ -438,6 +452,7 @@ package RoomTab {
       $self->{presence_userids} = \my @presence_userids;
       $presence_table->add( 0, 0, Tickit::Widget::Static->new( text => "Name" ) );
       $presence_table->add( 0, 1, Tickit::Widget::Static->new( text => "Since" ) );
+      $presence_table->add( 0, 2, Tickit::Widget::Static->new( text => "Lvl" ) );
 
       my $presence_float = $floatbox->add_float(
          child => Tickit::Widget::Frame->new(
@@ -451,7 +466,7 @@ package RoomTab {
          ),
 
          top => 0, bottom => -1, right => -1,
-         left => -40,
+         left => -44,
 
          # Initially hidden
          hidden => 1,
@@ -511,20 +526,25 @@ package RoomTab {
          },
 
          on_membership => sub {
-            my ( undef, $member, $event, %changes ) = @_;
+            my ( undef, $action_member, $event, $target_member, %changes ) = @_;
 
-            $self->update_member_presence( $member );
+            $self->update_member_presence( $target_member );
 
-            if( $changes{membership} and ( $changes{membership}[1] // "" ) ne "invite" ) {
+            if( $changes{membership} and ( $changes{membership}[1] // "" ) eq "invite" ) {
+               $self->append_line( format_invite( $action_member, $target_member ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            elsif( $changes{membership} ) {
                # On a LEAVE event they no longer have a displayname
-               $member->displayname = $changes{displayname}[0] if !defined $changes{membership}[1];
+               $target_member->displayname = $changes{displayname}[0] if !defined $changes{membership}[1];
 
-               $self->append_line( format_membership( $changes{membership}[1] // "leave", $member ),
+               $self->append_line( format_membership( $changes{membership}[1] // "leave", $target_member ),
                   time => $event->{ts} / 1000,
                );
             }
             elsif( $changes{displayname} ) {
-               $self->append_line( format_displayname_change( $member, @{ $changes{displayname} } ) );
+               $self->append_line( format_displayname_change( $target_member, @{ $changes{displayname} } ) );
             }
 
             $presence_summary->set_text(
@@ -532,18 +552,28 @@ package RoomTab {
             );
          },
          on_back_membership => sub {
-            my ( undef, $member, $event, %changes ) = @_;
+            my ( undef, $action_member, $event, $target_member, %changes ) = @_;
 
-            if( $changes{membership} and ( $changes{membership}[0] // "" ) ne "invite" ) {
+            if( $changes{membership} and ( $changes{membership}[0] // "" ) eq "invite" ) {
+               $self->prepend_line( format_invite( $action_member, $target_member ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            elsif( $changes{membership} ) {
                # On a JOIN event they don't yet have a displayname
-               $member->displayname = $changes{displayname}[0] if $changes{membership}[0] // '' eq "join";
+               $target_member->displayname = $changes{displayname}[0] if $changes{membership}[0] // '' eq "join";
 
-               $self->prepend_line( format_membership( $changes{membership}[0] // "leave", $member ),
+               $self->prepend_line( format_membership( $changes{membership}[0] // "leave", $target_member ),
                   time => $event->{ts} / 1000,
                );
             }
             elsif( $changes{displayname} ) {
-               $self->prepend_line( format_displayname_change( $member, reverse @{ $changes{displayname} } ),
+               $self->prepend_line( format_displayname_change( $target_member, reverse @{ $changes{displayname} } ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            elsif( $changes{level} ) {
+               $self->prepend_line( format_memberlevel_change( $action_member, $target_member, $changes{level}[0] ),
                   time => $event->{ts} / 1000,
                );
             }
@@ -556,12 +586,22 @@ package RoomTab {
                $self->append_line( format_name_change( $member, $changes{name}[1] ),
                   time => $event->{ts} / 1000,
                );
+               $self->set_name( $room->name );
+            }
+            if( $changes{aliases} ) {
+               $self->append_line( $_, time => $event->{ts} / 1000 )
+                  for format_alias_changes( $member, @{ $changes{aliases} }[0,1] );
             }
             if( $changes{topic} ) {
                $self->append_line( format_topic_change( $member, $changes{topic}[1] ),
                   time => $event->{ts} / 1000,
                );
                $self->update_headline;
+            }
+            foreach ( map { m/^level\.(.*)/ ? ( $1 ) : () } keys %changes ) {
+               $self->append_line( format_roomlevel_change( $member, $_, $changes{"level.$_"}[1] ),
+                  time => $event->{ts} / 1000,
+               );
             }
          },
          on_back_state_changed => sub {
@@ -572,8 +612,19 @@ package RoomTab {
                   time => $event->{ts} / 1000,
                );
             }
+            if( $changes{aliases} ) {
+               $self->prepend_line( $_, time => $event->{ts} / 1000 )
+                  for format_alias_changes( $member, @{ $changes{aliases} }[1,0] );
+
+               $self->prepend_line( "EVENT ${\Data::Dump::pp $event}", time => $event->{ts} / 1000 );
+            }
             if( $changes{topic} ) {
                $self->prepend_line( format_topic_change( $member, $changes{topic}[0] ),
+                  time => $event->{ts} / 1000,
+               );
+            }
+            foreach ( map { m/^level\.(.*)/ ? ( $1 ) : () } keys %changes ) {
+               $self->prepend_line( format_roomlevel_change( $member, $_, $changes{"level.$_"}[0] ),
                   time => $event->{ts} / 1000,
                );
             }
@@ -617,30 +668,39 @@ package RoomTab {
          return;
       }
 
-      my ( $name, $since );
+      my ( $w_name, $w_since, $w_power );
       if( defined $rowidx ) {
-         ( $name, $since ) = $presence_table->get_row( $rowidx+1 );
+         ( $w_name, $w_since, $w_power ) = $presence_table->get_row( $rowidx+1 );
       }
       else {
          $presence_table->append_row( [
-            $name = Tickit::Widget::Static->new( text => "" ),
-            $since = Tickit::Widget::Static->new( text => "" ),
+            $w_name  = Tickit::Widget::Static->new( text => "" ),
+            $w_since = Tickit::Widget::Static->new( text => "" ),
+            $w_power = Tickit::Widget::Static->new( text => "-", class => "level" ),
          ] );
          push @$presence_userids, $user_id;
       }
 
-      $name->set_style( fg => $PRESENCE_STATE_TO_COLOUR{$user->presence} )
+      $w_name->set_style( fg => $PRESENCE_STATE_TO_COLOUR{$user->presence} )
          if defined $user->presence;
 
       my $dname = defined $member->displayname ? $member->displayname : "[".$user->user_id."]";
       $dname = substr( $dname, 0, 17 ) . "..." if length $dname > 20;
-      $name->set_text( $dname );
+      $w_name->set_text( $dname );
 
       if( defined $user->last_active ) {
-         $since->set_text( strftime "%Y/%m/%d %H:%M", localtime $user->last_active );
+         $w_since->set_text( strftime "%Y/%m/%d %H:%M", localtime $user->last_active );
       }
       else {
-         $since->set_text( "    --    " );
+         $w_since->set_text( "    --    " );
+      }
+
+      if( defined( my $level = $self->{room}->member_level( $user_id ) ) ) {
+         $w_power->set_text( $level );
+         $w_power->set_style( fg => ( $level > 0 ) ? "yellow" : undef );
+      }
+      else {
+         $w_power->set_text( "-" );
       }
    }
 
@@ -707,6 +767,17 @@ package RoomTab {
       }
    }
 
+   sub format_invite
+   {
+      my ( $inviting_member, $invitee ) = @_;
+
+      return String::Tagged->new
+         ->append       ( " ** " )
+         ->append       ( format_displayname( $inviting_member ) )
+         ->append       ( " invites " )
+         ->append_tagged( $invitee->user->user_id, fg => "grey" );
+   }
+
    sub format_displayname_change
    {
       my ( $member, $oldname, $newname ) = @_;
@@ -738,6 +809,29 @@ package RoomTab {
          ->append_tagged( $name, fg => "cyan" );
    }
 
+   sub format_alias_changes
+   {
+      my ( $member, $old, $new ) = @_;
+
+      my %deleted = map { $_ => 1 } @$old;
+      delete $deleted{$_} for @$new;
+
+      my %added   = map { $_ => 1 } @$new;
+      delete $added{$_} for @$old;
+
+      return
+         ( map { String::Tagged->new
+                        ->append_tagged( " # ", fg => "yellow" )
+                        ->append       ( format_displayname( $member ) )
+                        ->append       ( " adds room alias " )
+                        ->append_tagged( $_, fg => "cyan" ) } sort keys %added ),
+         ( map { String::Tagged->new
+                        ->append_tagged( " # ", fg => "yellow" )
+                        ->append       ( format_displayname( $member ) )
+                        ->append       ( " deletes room alias " )
+                        ->append_tagged( $_, fg => "cyan" ) } sort keys %deleted );
+   }
+
    sub format_topic_change
    {
       my ( $member, $topic ) = @_;
@@ -747,6 +841,32 @@ package RoomTab {
          ->append       ( format_displayname( $member ) )
          ->append       ( " sets the topic to: " )
          ->append_tagged( $topic, fg => "cyan" );
+   }
+
+   sub format_roomlevel_change
+   {
+      my ( $member, $name, $level ) = @_;
+
+      return String::Tagged->new
+         ->append       ( " ** " )
+         ->append       ( format_displayname( $member ) )
+         ->append       ( " changes required level for " )
+         ->append_tagged( $name, fg => "green" )
+         ->append       ( " to " )
+         ->append_tagged( $level, $level > 0 ? ( fg => "yellow" ) : () );
+   }
+
+   sub format_memberlevel_change
+   {
+      my ( $changing_member, $target_member, $level ) = @_;
+
+      return String::Tagged->new
+         ->append       ( " ** " )
+         ->append       ( format_displayname( $changing_member ) )
+         ->append       ( " changes power level of " )
+         ->append       ( format_displayname( $target_member ) )
+         ->append       ( " to " )
+         ->append_tagged( $level, $level > 0 ? ( fg => "yellow" ) : () );
    }
 
    sub format_displayname
@@ -784,5 +904,95 @@ package RoomTab {
 
       my $room = $self->{room};
       $room->leave;
+   }
+
+   sub cmd_invite
+   {
+      my $self = shift;
+      my ( $user_id ) = @_;
+
+      my $room = $self->{room};
+
+      $room->invite( $user_id );
+   }
+
+   sub cmd_level
+   {
+      my $self = shift;
+      my $delete = $_[0] eq "-del" ? shift : 0;
+      my ( $user_id, $level ) = @_;
+
+      defined $level or $delete or
+         Future->fail( "Require a power level, or -del" );
+
+      my $room = $self->{room};
+
+      $room->change_member_levels( $user_id => $level );
+   }
+
+   sub cmd_roomlevels
+   {
+      my $self = shift;
+
+      my %levels;
+      foreach (@_) {
+         m/^(.*)=(\d+)$/ and $levels{$1} = $2;
+      }
+
+      my $room = $self->{room};
+      $room->change_levels( %levels );
+   }
+
+   sub cmd_topic
+   {
+      my $self = shift;
+      my $topic = join " ", @_; # TODO
+
+      my $room = $self->{room};
+
+      if( length $topic ) {
+         $room->set_topic( $topic )
+      }
+      else {
+         # TODO: Fetch and print the current topic
+         Future->done;
+      }
+   }
+
+   sub cmd_roomname
+   {
+      my $self = shift;
+      my $name = join " ", @_; # TODO
+
+      my $room = $self->{room};
+
+      if( length $name ) {
+         $room->set_name( $name )
+      }
+      else {
+         # TODO: Fetch and print the current name
+         Future->done;
+      }
+   }
+
+   sub cmd_add_alias
+   {
+      my $self = shift;
+      my ( $alias ) = @_;
+
+      my $room_id = $self->{room}->room_id;
+
+      $matrix->add_alias( $alias, $room_id );
+   }
+
+   sub cmd_delete_alias
+   {
+      my $self = shift;
+      my ( $alias ) = @_;
+
+      grep { $_ eq $alias } $self->{room}->aliases or
+         return Future->fail( "$alias is not an alias of this room" );
+
+      $matrix->delete_alias( $alias );
    }
 }

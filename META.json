@@ -4,7 +4,7 @@
       "Paul Evans <leonerd@leonerd.org.uk>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "Module::Build version 0.4206",
+   "generated_by" : "Module::Build version 0.421",
    "license" : [
       "perl_5"
    ],
@@ -38,18 +38,19 @@
    "provides" : {
       "Net::Async::Matrix" : {
          "file" : "lib/Net/Async/Matrix.pm",
-         "version" : "0.08"
+         "version" : "0.09"
       },
       "Net::Async::Matrix::Room" : {
          "file" : "lib/Net/Async/Matrix/Room.pm",
-         "version" : "0.08"
+         "version" : "0.09"
       }
    },
    "release_status" : "stable",
    "resources" : {
       "license" : [
          "http://dev.perl.org/licenses/"
-      ]
+      ],
+      "x_IRC" : "irc://irc.perl.org/#io-async"
    },
-   "version" : "0.08"
+   "version" : "0.09"
 }
