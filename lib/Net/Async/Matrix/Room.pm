@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 
 use Carp;
 
@@ -44,9 +44,9 @@ references in parameters:
 Invoked after the initial sync of the room has been completed as far as the
 state.
 
-=head2 on_message $member, $content
+=head2 on_message $member, $content, $event
 
-=head2 on_back_message $member, $content
+=head2 on_back_message $member, $content, $event
 
 Invoked on receipt of a new message from the given member, either "live" from
 the event stream, or from backward pagination.
@@ -990,7 +990,7 @@ sub _handle_roomevent_message_forward
    my $member = $self->{members_by_userid}{$user_id} or
       warn "TODO: Unknown member '$user_id' for forward message" and return;
 
-   $self->maybe_invoke_event( on_message => $member, $event->{content} );
+   $self->maybe_invoke_event( on_message => $member, $event->{content}, $event );
 }
 
 sub _handle_roomevent_message_backward
@@ -1002,7 +1002,7 @@ sub _handle_roomevent_message_backward
    my $member = $self->{back_members_by_userid}{$user_id} or
       warn "TODO: Unknown member '$user_id' for backward message" and return;
 
-   $self->maybe_invoke_event( on_back_message => $member, $event->{content} );
+   $self->maybe_invoke_event( on_back_message => $member, $event->{content}, $event );
 }
 
 sub _handle_event_m_presence

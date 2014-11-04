@@ -26,10 +26,10 @@
          "requires" : {
             "Data::Dump" : "0",
             "Future::Utils" : "0",
-            "IO::Async::Notifier" : "0",
+            "IO::Async::Notifier" : "0.63",
             "JSON" : "0",
             "List::Util" : "1.29",
-            "Net::Async::HTTP" : "0",
+            "Net::Async::HTTP" : "0.36",
             "POSIX" : "0",
             "Struct::Dumb" : "0"
          }
@@ -38,11 +38,11 @@
    "provides" : {
       "Net::Async::Matrix" : {
          "file" : "lib/Net/Async/Matrix.pm",
-         "version" : "0.09"
+         "version" : "0.10"
       },
       "Net::Async::Matrix::Room" : {
          "file" : "lib/Net/Async/Matrix/Room.pm",
-         "version" : "0.09"
+         "version" : "0.10"
       }
    },
    "release_status" : "stable",
@@ -52,5 +52,5 @@
       ],
       "x_IRC" : "irc://irc.perl.org/#io-async"
    },
-   "version" : "0.09"
+   "version" : "0.10"
 }

@@ -8,10 +8,10 @@ my $build = Module::Build->new(
    requires => {
       'Data::Dump' => 0,
       'Future::Utils' => 0,
-      'IO::Async::Notifier' => 0,
+      'IO::Async::Notifier' => '0.63',
       'JSON' => 0,
       'List::Util' => '1.29',
-      'Net::Async::HTTP' => 0,
+      'Net::Async::HTTP' => '0.36',
       'POSIX' => 0,
       'Struct::Dumb' => 0,
    },

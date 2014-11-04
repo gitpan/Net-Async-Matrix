@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 
 use Carp;
 
@@ -145,6 +145,7 @@ sub _init
 
    $params->{ua} ||= do {
       require Net::Async::HTTP;
+      Net::Async::HTTP->VERSION( '0.36' ); # SSL params
       my $ua = Net::Async::HTTP->new(
          fail_on_error => 1,
          max_connections_per_host => 3, # allow 2 longpolls + 1 actual command
@@ -160,8 +161,6 @@ sub _init
    $self->{rooms_by_id} = {};
 
    $self->{path_prefix} = PATH_PREFIX;
-
-   $self->{SSL_args} = {};
 }
 
 =head1 METHODS
@@ -182,9 +181,10 @@ sub configure
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
 
-   # TODO - ideally these should be set on $ua, but for now we'll have to pass
-   # them per request; see   https://rt.cpan.org/Ticket/Display.html?id=98514
-   $self->{SSL_args}{$_} = delete $params{$_} for grep m/^SSL_/, keys %params;
+   my $ua = $self->{ua};
+   foreach ( grep { m/^SSL_/ } keys %params ) {
+      $ua->configure( $_ => delete $params{$_} );
+   }
 
    $self->SUPER::configure( %params );
 }
@@ -220,10 +220,7 @@ sub _do_GET_json
    my $self = shift;
    my ( $path, %params ) = @_;
 
-   $self->{ua}->GET(
-      $self->_uri_for_path( $path, %params ),
-      $self->{SSL} ? %{ $self->{SSL_args} } : (),
-   )->then( sub {
+   $self->{ua}->GET( $self->_uri_for_path( $path, %params ) )->then( sub {
       my ( $response ) = @_;
 
       $response->content_type eq "application/json" or
@@ -246,7 +243,6 @@ sub _do_send_json
 
    my $f = $self->{ua}->do_request(
       request => $req,
-      $self->{SSL} ? %{ $self->{SSL_args} } : (),
    )->then( sub {
       my ( $response ) = @_;
 
@@ -282,7 +278,6 @@ sub _do_DELETE
    $self->{ua}->do_request(
       method => "DELETE",
       uri    => $self->_uri_for_path( $path, %params ),
-      $self->{SSL} ? %{ $self->{SSL_args} } : (),
    );
 }
 
@@ -379,10 +374,13 @@ sub register
       my @supported;
       # Try to find a flow for which we can support all the stages
       FLOW: foreach my $flow ( @$flows ) {
-         push @supported, join ",", @{ $flow->{stages} };
+         # Might or might not find a 'stages' key
+         my @stages = $flow->{stages} ? @{ $flow->{stages} } : ( $flow->{type} );
+
+         push @supported, join ",", @stages;
 
          my @flowcode;
-         foreach my $stage ( @{ $flow->{stages} } ) {
+         foreach my $stage ( @stages ) {
             next FLOW unless my ( $type ) = $stage =~ m/^m\.login\.(.*)$/;
             $type =~ s/\./_/g;
 
@@ -549,9 +547,7 @@ sub start_longpoll
       Future->wait_any(
          $self->loop->timeout_future( after => LONGPOLL_SECONDS + 5 ),
 
-         $self->{ua}->GET( $uri,
-            $self->{SSL} ? %{ $self->{SSL_args} } : (),
-         )->then( sub {
+         $self->{ua}->GET( $uri )->then( sub {
             my ( $response ) = @_;
             my $data = decode_json( $response->content );
             $self->_incoming_event( $_ ) foreach @{ $data->{chunk} };
@@ -595,7 +591,7 @@ sub _make_room
       push @args, "on_$_" => $self->{"on_room_$_"} if $self->{"on_room_$_"};
    }
 
-   my $room = $self->{rooms_by_id}{$room_id} = Net::Async::Matrix::Room->new(
+   my $room = $self->{rooms_by_id}{$room_id} = $self->make_room(
       matrix  => $self,
       room_id => $room_id,
       @args,
@@ -605,6 +601,12 @@ sub _make_room
    $self->maybe_invoke_event( on_room_new => $room );
 
    return $room;
+}
+
+sub make_room
+{
+   my $self = shift;
+   return Net::Async::Matrix::Room->new( @_ );
 }
 
 sub _get_or_make_room
@@ -804,7 +806,7 @@ sub create_room
    });
 }
 
-=head2 $matrix->join_room( $room_alias_or_id )->get
+=head2 $room = $matrix->join_room( $room_alias_or_id )->get
 
 Requests to join an existing room with the given alias name or plain room ID.
 If this room is already known by the C<$matrix> object, this method simply
@@ -839,6 +841,7 @@ sub join_room
       else {
          my $room = $self->_make_room( $room_id );
          $room->initial_sync
+            ->then_done( $room );
       }
    });
 }
@@ -999,6 +1002,17 @@ Presence state. One of C<offline>, C<unavailable> or C<online>.
 =head2 $last_active = $user->last_active
 
 Epoch time that the user was last active.
+
+=cut
+
+=head1 SUBCLASSING METHODS
+
+The following methods are not normally required by users of this class, but
+are provided for the convenience of subclasses to override.
+
+=head2 $room = $matrix->make_room( %params )
+
+Returns a new instance of L<Net::Async::Matrix::Room>.
 
 =cut
 

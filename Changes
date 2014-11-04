@@ -1,5 +1,17 @@
 Revision history for Net-Async-Matrix
 
+0.10    2014/11/04 16:15:31
+        [CHANGES]
+         * Extracted 'make_room' as a subclassable method
+         * Use new Net::Async::HTTP 0.36 ability to store SSL parameters
+         * Pass $event as another param in on{_back,}_message so that new
+           timestamp API is visible
+
+        [BUGFIXES]
+         * Declare correct version of IaNotifier in Build.PL
+         * Not all '/register' alternatives will have 'stages'
+         * Fix to ->join_room ensuring that $room itself is always returned
+
 0.09    2014/10/07 18:05:58
         [CHANGES]
          * Many more events are handled and reported via on_state:

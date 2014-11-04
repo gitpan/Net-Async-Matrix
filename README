@@ -150,7 +150,7 @@ METHODS
     instance of Net::Async::Matrix::Room and a string containing the full
     alias that was created.
 
-  $matrix->join_room( $room_alias_or_id )->get
+  $room = $matrix->join_room( $room_alias_or_id )->get
     Requests to join an existing room with the given alias name or plain
     room ID. If this room is already known by the `$matrix' object, this
     method simply returns it.
@@ -180,6 +180,13 @@ USER STRUCTURES
 
   $last_active = $user->last_active
     Epoch time that the user was last active.
+
+SUBCLASSING METHODS
+    The following methods are not normally required by users of this class,
+    but are provided for the convenience of subclasses to override.
+
+  $room = $matrix->make_room( %params )
+    Returns a new instance of Net::Async::Matrix::Room.
 
 SEE ALSO
     *   http://matrix.org/ - matrix.org home page

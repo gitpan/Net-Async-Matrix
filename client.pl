@@ -3,8 +3,6 @@
 use strict;
 use warnings;
 
-use Try::Tiny;
-
 use IO::Async::Loop;
 
 use Net::Async::Matrix;
@@ -509,19 +507,19 @@ package RoomTab {
          },
 
          on_message => sub {
-            my ( undef, $member, $content ) = @_;
+            my ( undef, $member, $content, $event ) = @_;
 
             $self->append_line( format_message( $content, $member ),
                indent => 10,
-               time   => $content->{hsob_ts} / 1000,
+               time   => ( $event->{origin_server_ts} // $content->{hsob_ts} ) / 1000,
             );
          },
          on_back_message => sub {
-            my ( undef, $member, $content ) = @_;
+            my ( undef, $member, $content, $event ) = @_;
 
             $self->prepend_line( format_message( $content, $member ),
                indent => 10,
-               time   => $content->{hsob_ts} / 1000,
+               time   => ( $event->{origin_server_ts} // $content->{hsob_ts} ) / 1000,
             );
          },
 
@@ -532,7 +530,7 @@ package RoomTab {
 
             if( $changes{membership} and ( $changes{membership}[1] // "" ) eq "invite" ) {
                $self->append_line( format_invite( $action_member, $target_member ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
             elsif( $changes{membership} ) {
@@ -540,11 +538,16 @@ package RoomTab {
                $target_member->displayname = $changes{displayname}[0] if !defined $changes{membership}[1];
 
                $self->append_line( format_membership( $changes{membership}[1] // "leave", $target_member ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
             elsif( $changes{displayname} ) {
                $self->append_line( format_displayname_change( $target_member, @{ $changes{displayname} } ) );
+            }
+            elsif( $changes{level} ) {
+               $self->append_line( format_memberlevel_change( $action_member, $target_member, $changes{level}[1] ),
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
+               );
             }
 
             $presence_summary->set_text(
@@ -556,7 +559,7 @@ package RoomTab {
 
             if( $changes{membership} and ( $changes{membership}[0] // "" ) eq "invite" ) {
                $self->prepend_line( format_invite( $action_member, $target_member ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
             elsif( $changes{membership} ) {
@@ -564,17 +567,17 @@ package RoomTab {
                $target_member->displayname = $changes{displayname}[0] if $changes{membership}[0] // '' eq "join";
 
                $self->prepend_line( format_membership( $changes{membership}[0] // "leave", $target_member ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
             elsif( $changes{displayname} ) {
                $self->prepend_line( format_displayname_change( $target_member, reverse @{ $changes{displayname} } ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
             elsif( $changes{level} ) {
                $self->prepend_line( format_memberlevel_change( $action_member, $target_member, $changes{level}[0] ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
          },
@@ -584,23 +587,24 @@ package RoomTab {
 
             if( $changes{name} ) {
                $self->append_line( format_name_change( $member, $changes{name}[1] ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
                $self->set_name( $room->name );
             }
             if( $changes{aliases} ) {
-               $self->append_line( $_, time => $event->{ts} / 1000 )
-                  for format_alias_changes( $member, @{ $changes{aliases} }[0,1] );
+               $self->append_line( $_,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
+               ) for format_alias_changes( $member, @{ $changes{aliases} }[0,1] );
             }
             if( $changes{topic} ) {
                $self->append_line( format_topic_change( $member, $changes{topic}[1] ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
                $self->update_headline;
             }
             foreach ( map { m/^level\.(.*)/ ? ( $1 ) : () } keys %changes ) {
                $self->append_line( format_roomlevel_change( $member, $_, $changes{"level.$_"}[1] ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
          },
@@ -609,23 +613,22 @@ package RoomTab {
 
             if( $changes{name} ) {
                $self->prepend_line( format_name_change( $member, $changes{name}[0] ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
             if( $changes{aliases} ) {
-               $self->prepend_line( $_, time => $event->{ts} / 1000 )
-                  for format_alias_changes( $member, @{ $changes{aliases} }[1,0] );
-
-               $self->prepend_line( "EVENT ${\Data::Dump::pp $event}", time => $event->{ts} / 1000 );
+               $self->prepend_line( $_,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
+               ) for format_alias_changes( $member, @{ $changes{aliases} }[1,0] );
             }
             if( $changes{topic} ) {
                $self->prepend_line( format_topic_change( $member, $changes{topic}[0] ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
             foreach ( map { m/^level\.(.*)/ ? ( $1 ) : () } keys %changes ) {
                $self->prepend_line( format_roomlevel_change( $member, $_, $changes{"level.$_"}[0] ),
-                  time => $event->{ts} / 1000,
+                  time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
                );
             }
          },
