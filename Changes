@@ -1,5 +1,11 @@
 Revision history for Net-Async-Matrix
 
+0.11    2014/11/14 18:25:06
+        [CHANGES]
+         * Support formatted messages in the "org.matrix.custom.html" format
+           by conversion to/from String::Tagged::Formatting instances
+         * Display formatted messages and image URLs in the client
+
 0.10    2014/11/04 16:15:31
         [CHANGES]
          * Extracted 'make_room' as a subclassable method

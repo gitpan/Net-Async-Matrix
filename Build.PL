@@ -13,10 +13,16 @@ my $build = Module::Build->new(
       'List::Util' => '1.29',
       'Net::Async::HTTP' => '0.36',
       'POSIX' => 0,
+      'String::Tagged' => '0.11',
       'Struct::Dumb' => 0,
    },
    recommends => {
       'Digest::HMAC_MD5' => 0,
+
+      # For formatted message support
+      'Convert::Color::HTML' => 0,
+      'HTML::TreeBuilder' => '5',
+      'String::Tagged::HTML' => 0,
    },
    build_requires => {
       'Test::More' => '0.88', # done_testing

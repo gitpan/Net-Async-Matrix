@@ -11,7 +11,7 @@ use Tickit::Async;
 use Tickit::Console 0.07; # time/datestamp format
 use Tickit::Widgets qw( FloatBox Frame GridBox ScrollBox Static VBox );
 Tickit::Widget::Frame->VERSION( '0.31' ); # bugfix to linetypes in constructor
-use String::Tagged 0.10; # ->append_tagged chainable
+use String::Tagged 0.11; # ->clone
 
 # Presence list scrolling requires Tickit 0.48 to actually work properly
 use Tickit 0.48;
@@ -433,6 +433,9 @@ package RoomTab {
 
    use POSIX qw( strftime );
 
+   use Net::Async::Matrix::Utils qw( parse_formatted_message );
+   use Convert::Color::XTerm;
+
    sub _setup
    {
       my $self = shift;
@@ -713,8 +716,21 @@ package RoomTab {
 
       my $s = String::Tagged->new;
 
+      my $formatted_body = parse_formatted_message( $content );
       my $msgtype = $content->{msgtype};
-      my $body    = $content->{body};
+
+      # Convert $body into something Tickit::Widget::Scoller will understand
+      my $body = String::Tagged->clone( $formatted_body,
+         only_tags => [qw( bold under italic reverse fg bg )],
+         convert_tags => {
+            bold    => "b",
+            under   => "u",
+            italic  => "i",
+            reverse => "rv",
+            fg      => sub { fg => $_[1]->as_xterm->index },
+            bg      => sub { bg => $_[1]->as_xterm->index },
+         },
+      );
 
       if( $msgtype eq "m.text" ) {
          return $s
@@ -729,6 +745,18 @@ package RoomTab {
             ->append( format_displayname( $member ) )
             ->append_tagged( " " )
             ->append       ( $body );
+      }
+      elsif( $msgtype eq "m.image" ) {
+         my $url  = $content->{url};
+         my $info = $content->{info} // $content->{body}; # cope with older message format
+
+         return $s
+            ->append_tagged( "[" )
+            ->append( format_displayname( $member ) )
+            ->append_tagged( "] " )
+            ->append_tagged( "image ", fg => "yellow" )
+            ->append_tagged( "($info->{w}x$info->{h}) ", fg => "grey" )
+            ->append_tagged( $url, fg => "hi-blue", u => 1 );
       }
       else {
          return $s

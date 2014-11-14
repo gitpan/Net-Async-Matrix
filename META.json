@@ -21,7 +21,10 @@
       },
       "runtime" : {
          "recommends" : {
-            "Digest::HMAC_MD5" : "0"
+            "Convert::Color::HTML" : "0",
+            "Digest::HMAC_MD5" : "0",
+            "HTML::TreeBuilder" : "5",
+            "String::Tagged::HTML" : "0"
          },
          "requires" : {
             "Data::Dump" : "0",
@@ -31,6 +34,7 @@
             "List::Util" : "1.29",
             "Net::Async::HTTP" : "0.36",
             "POSIX" : "0",
+            "String::Tagged" : "0.11",
             "Struct::Dumb" : "0"
          }
       }
@@ -38,11 +42,15 @@
    "provides" : {
       "Net::Async::Matrix" : {
          "file" : "lib/Net/Async/Matrix.pm",
-         "version" : "0.10"
+         "version" : "0.11"
       },
       "Net::Async::Matrix::Room" : {
          "file" : "lib/Net/Async/Matrix/Room.pm",
-         "version" : "0.10"
+         "version" : "0.11"
+      },
+      "Net::Async::Matrix::Utils" : {
+         "file" : "lib/Net/Async/Matrix/Utils.pm",
+         "version" : "0.11"
       }
    },
    "release_status" : "stable",
@@ -52,5 +60,5 @@
       ],
       "x_IRC" : "irc://irc.perl.org/#io-async"
    },
-   "version" : "0.10"
+   "version" : "0.11"
 }
