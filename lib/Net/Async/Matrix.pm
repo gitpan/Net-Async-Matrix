@@ -11,7 +11,8 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.11_001';
+our $VERSION = '0.11_002';
+$VERSION = eval $VERSION;
 
 use Carp;
 

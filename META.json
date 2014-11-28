@@ -42,15 +42,15 @@
    "provides" : {
       "Net::Async::Matrix" : {
          "file" : "lib/Net/Async/Matrix.pm",
-         "version" : "0.11_001"
+         "version" : "0.11_002"
       },
       "Net::Async::Matrix::Room" : {
          "file" : "lib/Net/Async/Matrix/Room.pm",
-         "version" : "0.11_001"
+         "version" : "0.11_002"
       },
       "Net::Async::Matrix::Utils" : {
          "file" : "lib/Net/Async/Matrix/Utils.pm",
-         "version" : "0.11_001"
+         "version" : "0.11_002"
       }
    },
    "release_status" : "testing",
@@ -60,5 +60,5 @@
       ],
       "x_IRC" : "irc://irc.perl.org/#io-async"
    },
-   "version" : "0.11_001"
+   "version" : "0.11_002"
 }

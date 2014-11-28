@@ -14,13 +14,13 @@ name: Net-Async-Matrix
 provides:
   Net::Async::Matrix:
     file: lib/Net/Async/Matrix.pm
-    version: 0.11_001
+    version: 0.11_002
   Net::Async::Matrix::Room:
     file: lib/Net/Async/Matrix/Room.pm
-    version: 0.11_001
+    version: 0.11_002
   Net::Async::Matrix::Utils:
     file: lib/Net/Async/Matrix/Utils.pm
-    version: 0.11_001
+    version: 0.11_002
 recommends:
   Convert::Color::HTML: '0'
   Digest::HMAC_MD5: '0'
@@ -39,4 +39,4 @@ requires:
 resources:
   IRC: irc://irc.perl.org/#io-async
   license: http://dev.perl.org/licenses/
-version: 0.11_001
+version: 0.11_002

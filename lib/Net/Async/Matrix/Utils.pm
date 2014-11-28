@@ -8,7 +8,8 @@ package Net::Async::Matrix::Utils;
 use strict;
 use warnings;
 
-our $VERSION = '0.11_001';
+our $VERSION = '0.11_002';
+$VERSION = eval $VERSION;
 
 use Exporter 'import';
 our @EXPORT_OK = qw(

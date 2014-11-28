@@ -11,7 +11,8 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.11_001';
+our $VERSION = '0.11_002';
+$VERSION = eval $VERSION;
 
 use Carp;
 
