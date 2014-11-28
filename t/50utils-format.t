@@ -25,6 +25,10 @@ use Net::Async::Matrix::Utils qw( parse_formatted_message build_formatted_messag
    is_deeply( $content,
       { body => "A plain text reply" },
       'content of plain string' );
+
+   is_deeply( build_formatted_message( String::Tagged->new( "No actual tags" ) ),
+      { body => "No actual tags" },
+      'content of String::Tagged with no tags' );
 }
 
 # HTML formatted
@@ -42,6 +46,7 @@ SKIP: {
    is( $body->str, "A body with bold and green text", 'body string' );
 
    ok( $body->get_tags_at( index $body, "bold" )->{bold}, 'body has bold' );
+   is( $body->get_tag_extent( index( $body, "bold" ), "bold" )->length, 4, 'bold tag correct length' );
    ok( my $fg = $body->get_tags_at( index $body, "green" )->{fg}, 'body has fg' );
    is( $fg->name, "green", '$fg colour name' );
 }

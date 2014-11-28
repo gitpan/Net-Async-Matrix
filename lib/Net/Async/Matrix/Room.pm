@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.11';
+our $VERSION = '0.11_001';
 
 use Carp;
 
@@ -119,7 +119,7 @@ sub _init
    $self->{members_by_userid} = {};
    # Power levels can exist for users who aren't in the room. So store them
    # separately, rather than on the member objects themselves
-   $self->{level_by_userid} = {};
+   $self->{powerlevels} = {};
 
    $self->{aliases_by_hs} = {};
 }
@@ -716,7 +716,7 @@ sub _handle_roomevent_power_levels_initial
    my ( $event ) = @_;
 
    my $levels = $event->{content};
-   $self->{level_by_userid} = { %$levels };
+   $self->{powerlevels} = { %$levels };
 }
 
 sub _handle_roomevent_power_levels_forward
@@ -725,7 +725,7 @@ sub _handle_roomevent_power_levels_forward
    my ( $event ) = @_;
 
    my $levels = $event->{content};
-   $self->{level_by_userid} = { %$levels };
+   $self->{powerlevels} = { %$levels };
 
    $self->_handle_roomevent_power_levels( on_membership =>
       $event, $self->{members_by_userid}, $event->{prev_content}, $levels
@@ -746,6 +746,9 @@ sub _handle_roomevent_power_levels
 {
    my $self = shift;
    my ( $name, $event, $members, $old, $new ) = @_;
+
+   $old = $old->{users};
+   $new = $new->{users};
 
    my $change_member = $members->{$event->{user_id}};
 
@@ -783,7 +786,7 @@ sub member_level
    my $self = shift;
    my ( $user_id ) = @_;
 
-   return $self->{level_by_userid}{$user_id} // $self->{level_by_userid}{default};
+   return $self->{powerlevels}{users}{$user_id} // $self->{powerlevels}{users_default};
 }
 
 =head2 $room->change_member_levels( %levels )->get
@@ -805,24 +808,27 @@ sub change_member_levels
 {
    my $self = shift;
 
-   my %levels = %{ $self->{level_by_userid} };
+   # Can't just edit the local cache as maybe the server will reject it. Clone
+   # it and if the server accepts our modification the cache will be updated
+   # on the incoming event.
+
+   my %user_levels = %{ $self->{powerlevels}{users} };
+
    while( @_ ) {
       my $user_id = shift;
       my $value   = shift;
 
       if( defined $value ) {
-         $levels{$user_id} = $value;
-      }
-      elsif( $user_id ne "default" ) {
-         delete $levels{$user_id};
+         $user_levels{$user_id} = $value;
       }
       else {
-         croak "Cannot delete the 'default' power_level";
+         delete $user_levels{$user_id};
       }
    }
 
-   $self->_do_PUT_json( "/state/m.room.power_levels", \%levels )
-      ->then_done();
+   $self->_do_PUT_json( "/state/m.room.power_levels",
+      { %{ $self->{powerlevels} }, users => \%user_levels }
+   )->then_done();
 }
 
 =head2 $room->leave->get

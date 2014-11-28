@@ -56,6 +56,11 @@ EVENTS
     Matrix event as received; with at least the keys `inviter' and
     `room_id'.
 
+  on_unknown_event $event
+    Invoked on receipt of any sort of event from the event stream, that is
+    not recognised by any of the other code. This can be used to handle new
+    kinds of incoming events.
+
 PARAMETERS
     The following named parameters may be passed to `new' or `configure'. In
     addition, `CODE' references for event handlers using the event names

@@ -1,5 +1,15 @@
 Revision history for Net-Async-Matrix
 
+0.11_001 2014/11/28 12:27:44
+        [CHANGES]
+         * Cope with new m.room.power_levels event format
+         * Allow applications to handle new/unrecognised events by adding
+           'on_unknown_events' event
+        
+        [BUGFIXES]
+         * Don't emit rich formatted messages if there are no actual
+           formatting tags set on the String::Tagged instance
+
 0.11    2014/11/14 18:25:06
         [CHANGES]
          * Support formatted messages in the "org.matrix.custom.html" format

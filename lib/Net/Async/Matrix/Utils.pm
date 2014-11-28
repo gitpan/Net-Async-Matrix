@@ -8,7 +8,7 @@ package Net::Async::Matrix::Utils;
 use strict;
 use warnings;
 
-our $VERSION = '0.11';
+our $VERSION = '0.11_001';
 
 use Exporter 'import';
 our @EXPORT_OK = qw(
@@ -145,7 +145,7 @@ sub build_formatted_message
 {
    my ( $str ) = @_;
 
-   return { body => $str } if !ref $str;
+   return { body => $str } if !ref $str or !$str->tagnames;
 
    if( CAN_BUILD_HTML ) {
       my $html = String::Tagged::HTML->clone( $str,

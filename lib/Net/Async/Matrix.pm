@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.11';
+our $VERSION = '0.11_001';
 
 use Carp;
 
@@ -100,6 +100,12 @@ Invoked when the user has now left a room.
 Invoked on receipt of a room invite. The C<$event> will contain the plain
 Matrix event as received; with at least the keys C<inviter> and C<room_id>.
 
+=head2 on_unknown_event $event
+
+Invoked on receipt of any sort of event from the event stream, that is not
+recognised by any of the other code. This can be used to handle new kinds of
+incoming events.
+
 =cut
 
 =head1 PARAMETERS
@@ -176,7 +182,7 @@ sub configure
    my %params = @_;
 
    foreach (qw( server path_prefix ua SSL
-                on_log on_presence on_room_new on_room_del on_invite
+                on_log on_unknown_event on_presence on_room_new on_room_del on_invite
                 on_room_member on_room_message )) {
       $self->{$_} = delete $params{$_} if exists $params{$_};
    }
@@ -661,7 +667,9 @@ sub _incoming_event
       unshift @subtype_args, pop @type_parts;
    }
 
-   $self->log( "  incoming event=".pp($event) );
+   $self->maybe_invoke_event(
+      on_unknown_event => $event
+   ) or $self->log( "  incoming event=".pp($event) );
 }
 
 sub _on_self_leave

@@ -929,6 +929,20 @@ package RoomTab {
       $room->send_message( type => "m.emote", body => $text );
    }
 
+   sub cmd_image
+   {
+      my $self = shift;
+      my ( $url ) = @_;
+
+      my $room = $self->{room};
+
+      $room->send_message( type => "m.image",
+         url  => $url,
+         # TODO: should fetch size, metadata, etc...
+         info => {},
+      );
+   }
+
    sub cmd_leave
    {
       my $self = shift;
