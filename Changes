@@ -1,10 +1,6 @@
 Revision history for Net-Async-Matrix
 
-0.11_002 2014/11/28 13:33:52
-        [BUGFIXES]
-         * Remember to 'eval $VERSION'
-
-0.11_001 2014/11/28 12:27:44
+0.12    2014/12/02 15:50:18
         [CHANGES]
          * Cope with new m.room.power_levels event format
          * Allow applications to handle new/unrecognised events by adding

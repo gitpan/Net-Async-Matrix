@@ -597,7 +597,7 @@ package RoomTab {
             if( $changes{aliases} ) {
                $self->append_line( $_,
                   time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
-               ) for format_alias_changes( $member, @{ $changes{aliases} }[0,1] );
+               ) for format_alias_changes( $event->{user_id}, @{ $changes{aliases} }[0,1] );
             }
             if( $changes{topic} ) {
                $self->append_line( format_topic_change( $member, $changes{topic}[1] ),
@@ -622,7 +622,7 @@ package RoomTab {
             if( $changes{aliases} ) {
                $self->prepend_line( $_,
                   time => ( $event->{origin_server_ts} // $event->{ts} ) / 1000,
-               ) for format_alias_changes( $member, @{ $changes{aliases} }[1,0] );
+               ) for format_alias_changes( $event->{user_id}, @{ $changes{aliases} }[1,0] );
             }
             if( $changes{topic} ) {
                $self->prepend_line( format_topic_change( $member, $changes{topic}[0] ),
@@ -842,7 +842,7 @@ package RoomTab {
 
    sub format_alias_changes
    {
-      my ( $member, $old, $new ) = @_;
+      my ( $hs_domain, $old, $new ) = @_;
 
       my %deleted = map { $_ => 1 } @$old;
       delete $deleted{$_} for @$new;
@@ -853,12 +853,12 @@ package RoomTab {
       return
          ( map { String::Tagged->new
                         ->append_tagged( " # ", fg => "yellow" )
-                        ->append       ( format_displayname( $member ) )
+                        ->append_tagged( $hs_domain, fg => "red" )
                         ->append       ( " adds room alias " )
                         ->append_tagged( $_, fg => "cyan" ) } sort keys %added ),
          ( map { String::Tagged->new
                         ->append_tagged( " # ", fg => "yellow" )
-                        ->append       ( format_displayname( $member ) )
+                        ->append_tagged( $hs_domain, fg => "red" )
                         ->append       ( " deletes room alias " )
                         ->append_tagged( $_, fg => "cyan" ) } sort keys %deleted );
    }

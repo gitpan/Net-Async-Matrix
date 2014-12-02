@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.11_002';
+our $VERSION = '0.12';
 $VERSION = eval $VERSION;
 
 use Carp;
@@ -493,7 +493,7 @@ sub start
             if( $membership eq "join" ) {
                my $state = $_->{state};
 
-               my $room = $self->_make_room( $room_id );
+               my $room = $self->_get_or_make_room( $room_id );
                $room->_handle_event_initial( $_ ) for @$state;
 
                $room->maybe_invoke_event( on_synced_state => );
@@ -589,11 +589,12 @@ sub _get_or_make_user
 sub _make_room
 {
    my $self = shift;
-   my ( $room_id, @args ) = @_;
+   my ( $room_id ) = @_;
 
    $self->{rooms_by_id}{$room_id} and
       croak "Already have a room with ID '$room_id'";
 
+   my @args;
    foreach (qw( message member )) {
       push @args, "on_$_" => $self->{"on_room_$_"} if $self->{"on_room_$_"};
    }
@@ -619,10 +620,10 @@ sub make_room
 sub _get_or_make_room
 {
    my $self = shift;
-   my ( $room_id, @args ) = @_;
+   my ( $room_id ) = @_;
 
    return $self->{rooms_by_id}{$room_id} //
-      $self->_make_room( $room_id, @args );
+      $self->_make_room( $room_id );
 }
 
 =head2 $user = $matrix->myself

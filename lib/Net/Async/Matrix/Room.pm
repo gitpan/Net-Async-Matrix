@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.11_002';
+our $VERSION = '0.12';
 $VERSION = eval $VERSION;
 
 use Carp;
@@ -701,7 +701,7 @@ i.e. are not invitees, or have left.
 sub joined_members
 {
    my $self = shift;
-   return grep { $_->membership eq "join" } $self->members;
+   return grep { ( $_->membership // "" ) eq "join" } $self->members;
 }
 
 =head2 $level = $room->member_level( $user_id )
