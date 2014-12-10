@@ -11,5 +11,8 @@ META.json
 META.yml
 README
 t/00use.t
+t/01login.t
+t/02initial.t
 t/50utils-format.t
+t/70fail-initial.t
 t/99pod.t

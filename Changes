@@ -1,5 +1,14 @@
 Revision history for Net-Async-Matrix
 
+0.13    2014/12/10 17:08:42
+        [CHANGES]
+         * Initial start at some unit tests
+
+        [BUGFIXES]
+         * 'use URI' since it's needed
+         * Clear the (global and room) initialSync futures if the operation
+           fails so that the next call will re-attempt it
+
 0.12    2014/12/02 15:50:18
         [CHANGES]
          * Cope with new m.room.power_levels event format

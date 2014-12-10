@@ -11,7 +11,7 @@ use warnings;
 # Not really a Notifier but we like the ->maybe_invoke_event style
 use base qw( IO::Async::Notifier );
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 $VERSION = eval $VERSION;
 
 use Carp;
@@ -180,7 +180,8 @@ sub initial_sync
 
       $self->maybe_invoke_event( on_synced_state => );
       Future->done;
-   });
+   })
+      ->on_fail( sub { undef $self->{initial_sync} } );
 }
 
 sub _handle_event_initial

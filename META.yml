@@ -3,6 +3,7 @@ abstract: 'use Matrix with L<IO::Async>'
 author:
   - 'Paul Evans <leonerd@leonerd.org.uk>'
 build_requires:
+  Test::Async::HTTP: '0.02'
   Test::More: '0.88'
 dynamic_config: 1
 generated_by: 'Module::Build version 0.421, CPAN::Meta::Converter version 2.142690'
@@ -14,13 +15,13 @@ name: Net-Async-Matrix
 provides:
   Net::Async::Matrix:
     file: lib/Net/Async/Matrix.pm
-    version: '0.12'
+    version: '0.13'
   Net::Async::Matrix::Room:
     file: lib/Net/Async/Matrix/Room.pm
-    version: '0.12'
+    version: '0.13'
   Net::Async::Matrix::Utils:
     file: lib/Net/Async/Matrix/Utils.pm
-    version: '0.12'
+    version: '0.13'
 recommends:
   Convert::Color::HTML: '0'
   Digest::HMAC_MD5: '0'
@@ -36,7 +37,8 @@ requires:
   POSIX: '0'
   String::Tagged: '0.11'
   Struct::Dumb: '0'
+  URI: '0'
 resources:
   IRC: irc://irc.perl.org/#io-async
   license: http://dev.perl.org/licenses/
-version: '0.12'
+version: '0.13'

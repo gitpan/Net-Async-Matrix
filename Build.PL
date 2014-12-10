@@ -15,6 +15,7 @@ my $build = Module::Build->new(
       'POSIX' => 0,
       'String::Tagged' => '0.11',
       'Struct::Dumb' => 0,
+      'URI' => 0,
    },
    recommends => {
       'Digest::HMAC_MD5' => 0,
@@ -24,8 +25,9 @@ my $build = Module::Build->new(
       'HTML::TreeBuilder' => '5',
       'String::Tagged::HTML' => 0,
    },
-   build_requires => {
+   test_requires => {
       'Test::More' => '0.88', # done_testing
+      'Test::Async::HTTP' => '0.02',
    },
    auto_configure_requires => 0, # Don't add M::B to configure_requires
    license => 'perl',

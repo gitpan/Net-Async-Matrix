@@ -1020,6 +1020,16 @@ package RoomTab {
       }
    }
 
+   sub cmd_roomid
+   {
+      my $self = shift;
+
+      my $roomid = $self->{room}->room_id;
+      $self->append_line( "Room ID is: $roomid" );
+
+      Future->done;
+   }
+
    sub cmd_add_alias
    {
       my $self = shift;

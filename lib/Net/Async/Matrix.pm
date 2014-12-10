@@ -11,7 +11,7 @@ use warnings;
 use base qw( IO::Async::Notifier );
 IO::Async::Notifier->VERSION( '0.63' ); # adopt_future
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 $VERSION = eval $VERSION;
 
 use Carp;
@@ -23,6 +23,7 @@ use JSON qw( encode_json decode_json );
 use Data::Dump 'pp';
 use Struct::Dumb;
 use Time::HiRes qw( time );
+use URI;
 
 struct User => [qw( user_id displayname presence last_active )];
 
@@ -161,6 +162,13 @@ sub _init
       $self->add_child( $ua );
       $ua
    };
+
+   # Injectable for unit tests, other event systems, etc..
+   # For now undocumented while I try to work out the wider design issues
+   $self->{make_delay} = delete $params->{make_delay} || $self->_capture_weakself( sub {
+      my ( $self, $secs ) = @_;
+      $self->loop->delay_future( after => $secs );
+   } );
 
    $self->{msgid_next} = 0;
 
@@ -483,6 +491,7 @@ sub start
 
    return $self->{start_f} ||= do {
       my $f = $self->_do_GET_json( "/initialSync", limit => 0 )
+         ->on_fail( sub { undef $self->{start_f} } )
       ->then( sub {
          my ( $sync ) = @_;
 
@@ -552,7 +561,8 @@ sub start_longpoll
       );
 
       Future->wait_any(
-         $self->loop->timeout_future( after => LONGPOLL_SECONDS + 5 ),
+         $self->{make_delay}->( LONGPOLL_SECONDS + 5 )
+            ->else_fail( "Longpoll timed out" ),
 
          $self->{ua}->GET( $uri )->then( sub {
             my ( $response ) = @_;
@@ -566,9 +576,9 @@ sub start_longpoll
          my ( $failure ) = @_;
          warn "Longpoll failed - $failure\n";
 
-         $self->loop->delay_future( after => 3 )
+         $self->{make_delay}->( 3 )
       });
-   } while => sub { 1 };
+   } while => sub { !shift->failure };
 }
 
 sub stop_longpoll
